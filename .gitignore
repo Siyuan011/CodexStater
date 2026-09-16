@@ -1,0 +1,15 @@
+.cache/
+__pycache__/
+*.pyc
+config.json
+config.local.json
+.env
+.env.*
+!.env.example
+/*.html
+*.sqlite
+*.sqlite-*
+*.db
+*.log
+*.bundle
+config.backup-*.json

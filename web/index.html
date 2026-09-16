@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Codex 本机用量面板</title><style>/*__STYLE__*/</style></head>
+<body>
+<main id="stater">
+<header><div><h1>Codex 本机用量</h1><div id="updated" class="muted small">正在准备最近 7 天的数据…</div></div><div class="actions"><span id="mode" class="badge">本机动态面板</span><button id="refresh">立即刷新</button><button id="export">导出 HTML</button></div></header>
+<div id="error" role="alert" hidden></div>
+<div class="toolbar">
+<div class="range-group" aria-label="时间范围"><button data-hours="24" aria-pressed="true">过去 24 小时</button><button data-hours="168" aria-pressed="false">过去 7 天</button></div>
+<label>模型 <select id="model"><option value="">全部模型</option></select></label>
+<label>推理强度 <select id="effort"><option value="">全部强度</option></select></label>
+<label><input type="checkbox" id="exclude-monitor">排除本统计任务</label>
+<label><input type="checkbox" id="exclude-internal">排除内部审批</label>
+<button id="reset" class="subtle">恢复全部</button>
+</div>
+<div class="selection" id="selection" hidden><span id="selected-task"></span><button id="clear-task" class="subtle">取消对话筛选</button></div>
+<p id="filter-empty" class="small muted" role="status" hidden></p>
+<div class="stats" aria-live="polite">
+<div><span class="muted">累计 Token</span><strong id="total">—</strong><small id="total-exact"></small></div>
+<div><span class="muted">缓存输入占比</span><strong id="cache">—</strong><small>缓存输入 ÷ 全部输入</small></div>
+<div><span class="muted">输出 Token</span><strong id="output">—</strong><small id="reasoning"></small></div>
+<div><span class="muted">有用量的对话</span><strong id="count">—</strong><small id="count-note">含可识别的内部审批会话</small></div>
+</div>
+<section class="panel">
+<div class="panel-head"><div><h2>每小时本机用量</h2><p id="range-label" class="muted small"></p></div><div class="legend"><span><i style="background:var(--blue)"></i>缓存输入</span><span><i style="background:var(--teal)"></i>未缓存输入</span><span><i style="background:var(--orange)"></i>输出</span></div></div>
+<svg id="usage-chart" role="img" aria-label="每小时用量及分对话明细"></svg>
+<div class="chart-footer"><span class="muted small">每格 2.5M Token，10M 对应四格；峰值越高，图表越高。<br>悬停看前 8 个对话，点击查看完整明细。</span><label class="small">查看小时 <select id="hour-picker" aria-label="选择小时"></select><button id="hour-open" class="subtle">展开明细</button></label></div>
+</section>
+<section class="panel">
+<div class="panel-head"><div><h2>账号剩余额度</h2><p id="quota-status" class="small muted">读取已有额度巡检记录</p></div><div id="quota-legend" class="legend"></div></div>
+<svg id="quota-chart" role="img" aria-label="账号剩余额度曲线"></svg>
+<div id="quota-note" class="small muted"></div>
+</section>
+<section class="panel">
+<div class="panel-head"><div><h2>对话用量排行</h2><p class="small muted">点击对话名称筛选上方时间分布。</p></div><span id="rank-count" class="small muted"></span></div>
+<div class="table-wrap"><table><thead><tr><th>对话 / 项目</th><th class="optional">模型 / 推理强度</th><th class="num">总 Token</th><th class="num mobile-hide">缓存输入</th><th class="num optional">输出</th><th class="num mobile-hide">占比</th></tr></thead><tbody id="ranking"></tbody></table></div>
+<div class="ranking-footer"><button id="ranking-toggle" class="subtle" type="button" aria-controls="ranking" aria-expanded="false" hidden>展开其余对话</button></div>
+</section>
+<section class="panel">
+<div class="panel-head"><div><h2>模型与推理强度用量</h2><p class="small muted">按当前筛选统计；选择“全部强度”可比较各档用量。未记录强度的日志单列。</p></div><span id="comparison-count" class="small muted"></span></div>
+<div class="share-layout" role="group" aria-label="模型与推理强度用量占比">
+<div class="share-visual"><svg id="share-chart" role="img" aria-labelledby="share-chart-title share-chart-description"></svg></div>
+<div class="share-breakdown"><div class="share-heading"><h3>用量占比</h3><span class="small muted">占当前筛选总量</span></div><ul id="share-legend" class="share-legend" aria-label="各模型与推理强度的用量和占比"></ul><p id="share-empty" class="share-empty muted" hidden>当前筛选暂无用量，调整筛选后即可查看分布。</p></div>
+</div>
+<p class="comparison-scroll-hint small muted">左右滑动表格，查看完整用量。</p>
+<div class="table-wrap" tabindex="0" aria-label="模型与推理强度用量，可横向滚动"><table class="comparison-table"><thead><tr><th>模型</th><th>推理强度</th><th class="num">总 Token</th><th class="num">输入</th><th class="num">缓存输入</th><th class="num">输出</th><th class="num">推理输出</th><th class="num">对话数</th></tr></thead><tbody id="comparison"></tbody><tfoot id="comparison-total"></tfoot></table></div>
+<p class="small muted">输入包含缓存输入，输出包含推理输出；同一对话切换模型或强度会计入多个分组，合计对话数已去重。</p>
+</section>
+<details class="notes"><summary>数据覆盖与统计口径</summary>
+<p id="coverage"></p><p id="scan-info"></p>
+<ul><li>本机用量按日志事件发生时间汇总。输入包含缓存输入，输出包含推理输出，子项不重复相加；Token 不能直接换算订阅额度或费用。</li>
+<li>直接回溯已有日志，与原来每小时巡检按“发现时间”记录的数值可能不同。缺失、迁移或尚未落盘的事件会影响完整性。</li>
+<li>24 小时与 7 天都是截至更新时间的滚动窗口。首尾小时可能不完整，按窗口内真实事件计数。</li>
+<li>每小时明细按对话合并，保留模型与推理强度的对应关系；用量筛选同时作用于总览、分组比较、用量图表、明细和排行。</li>
+<li>推理强度按日志记录统计，中途换档按各次用量归属；缺失强度显示“未记录”。Ultra 与 Max 分开统计，用量不能证明质量或速度差异。</li>
+<li>账号额度来自原巡检保存的记录，更新频率仍为每小时；额度窗口变化处断开曲线。面板不调用账号接口、模型或 API。</li>
+<li>日志无可靠的逐事件账号与进程归属；内部审批用量单列但不视为官方账单。报告机器名是采集电脑，不证明导入日志的实际来源。</li>
+<li>后台服务只监听 127.0.0.1。页面打开期间定时更新，隐藏时暂停轮询；再次打开或切回页面会刷新。导出的 HTML 是离线快照。</li></ul>
+</details>
+<footer class="small muted" id="footer"></footer>
+</main>
+<div id="tooltip" role="tooltip" hidden></div>
+<dialog id="hour-dialog"><div class="panel-head"><div><h2 id="hour-title">小时明细</h2><p id="hour-summary" class="muted"></p></div><button id="close-dialog" aria-label="关闭小时明细">关闭</button></div><div class="table-wrap"><table><thead><tr><th>对话</th><th class="num">Token</th><th class="num mobile-hide">缓存输入</th><th class="num mobile-hide">输出</th><th class="num">占比</th></tr></thead><tbody id="hour-table"></tbody></table></div></dialog>
+<script id="bootstrap" type="application/json">__BOOTSTRAP__</script><script>/*__SCRIPT__*/</script>
+</body></html>
