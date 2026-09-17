@@ -1,15 +1,20 @@
 (()=>{
 "use strict";
 const $=id=>document.getElementById(id), M=window.StaterMath, NS="http://www.w3.org/2000/svg";
-const initial=JSON.parse($("bootstrap").textContent);let D=initial,live=!initial,busy=false,timer=null,lastWidth=0,selectedHour=0;
-const state={hours:24,model:"",effort:"",excludeMonitor:false,excludeInternal:false,task:null,...(initial?.ui||{})};
+const initial=JSON.parse($("bootstrap").textContent);let D=initial,live=!initial,busy=false,timer=null,lastWidth=0,selectedHour=0,requestId=0,requestController=null,rangePending=false;
+const state={hours:24,model:"",effort:"",excludeMonitor:false,excludeInternal:false,task:null,customRange:null,...(initial?.ui||{})};
 let rankingExpanded=false;
 const hiddenQuota=new Set(),fmt=new Intl.NumberFormat("zh-CN");
 const n=x=>fmt.format(Math.round(x)),compact=x=>x>=1e8?(x/1e8).toFixed(2)+" 亿":x>=1e4?(x/1e4).toFixed(2)+" 万":n(x);
 const percent=(a,b)=>b?(100*a/b).toFixed(1)+"%":"—";
 const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const date=(t,full=false)=>new Intl.DateTimeFormat("zh-CN",{timeZone:"UTC",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",...(full?{second:"2-digit"}:{}),hour12:false}).format(new Date(t+D.timezoneOffset*60000));
-const time=t=>new Intl.DateTimeFormat("zh-CN",{timeZone:"UTC",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date(t+D.timezoneOffset*60000));
+const dateFormatters=new Map(),timeFormatter=new Intl.DateTimeFormat("zh-CN",{timeZone:"UTC",hour:"2-digit",minute:"2-digit",hour12:false});
+const date=(t,full=false)=>{
+ const year=state.hours==="custom",key=String(full)+year;
+ if(!dateFormatters.has(key))dateFormatters.set(key,new Intl.DateTimeFormat("zh-CN",{timeZone:"UTC",...(year?{year:"numeric"}:{}),month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",...(full?{second:"2-digit"}:{}),hour12:false}));
+ return dateFormatters.get(key).format(new Date(t+D.timezoneOffset*60000));
+};
+const time=t=>timeFormatter.format(new Date(t+D.timezoneOffset*60000));
 const zone=()=>D.timezone==="+08:00"?"北京时间":"UTC"+D.timezone;
 const pairs=t=>t.modelEfforts.map(M.modelEffortLabel).join(" / ");
 const colors=["var(--teal)","var(--blue)","var(--orange)"];
@@ -29,8 +34,8 @@ function axes(svg,start,end,max,label,height,divisions=4){
  svg.replaceChildren();svg.setAttribute("viewBox","0 0 "+width+" "+height);svg.setAttribute("height",height);
  const x=t=>left+(t-start)/(end-start)*(right-left),y=v=>bottom-v/(max||1)*(bottom-top);
  for(let i=0;i<=divisions;i++){const v=max*i/divisions;add(svg,"line",{x1:left,y1:y(v),x2:right,y2:y(v),class:"grid"});add(svg,"text",{x:left-7,y:y(v)+4,"text-anchor":"end"},label==="剩余 (%)"?n(v):v>=1e6?(v/1e6).toFixed(v%1e6?1:0)+"M":v>=1e3?(v/1e3).toFixed(v%1e3?1:0)+"k":n(v));}
- const ticks=width<440?3:width<750?4:6;
- for(let i=0;i<ticks;i++){const t=start+(end-start)*i/(ticks-1);add(svg,"text",{x:x(t),y:bottom+23,"text-anchor":i===0?"start":i===ticks-1?"end":"middle"},width<440&&state.hours===24?time(t):date(t));}
+ const ticks=width<440?(state.hours==="custom"?2:3):width<750?4:6;
+ for(let i=0;i<ticks;i++){const t=start+(end-start)*i/(ticks-1);add(svg,"text",{x:x(t),y:bottom+23,"text-anchor":i===0?"start":i===ticks-1?"end":"middle"},width<440&&state.hours===24?time(t):date(t).replace(/^\d{4}\//,""));}
  add(svg,"text",{x:left,y:14,class:"axis-title"},label);add(svg,"text",{x:right,y:height-3,"text-anchor":"end",class:"axis-title"},zone());
  return {width,left,right,top,bottom,x,y};
 }
@@ -50,9 +55,9 @@ function openHour(index,show=true){
  hideTip();if(show&&!$("hour-dialog").open)$("hour-dialog").showModal();
 }
 function drawUsage(){
- const v=view(),svg=$("usage-chart"),totals=v.intervals.map(i=>M.sum(filtered(i))),peak=Math.max(1,...totals.map(t=>t.total));
+ const v=view(),svg=$("usage-chart"),totals=v.intervals.map(i=>M.sum(filtered(i))),peak=totals.reduce((max,t)=>Math.max(max,t.total),1);
  const scale=M.usageScale(peak),a=axes(svg,v.start,v.end,scale.max,"Token",scale.height,scale.steps);
- v.intervals.forEach((i,index)=>{const t=totals[index],x=a.x(i.start),w=Math.max(.6,a.x(i.end)-x-(state.hours===168?1:3));let sum=0;
+ v.intervals.forEach((i,index)=>{const t=totals[index];if(!t.total)return;const x=a.x(i.start),span=a.x(i.end)-x,w=Math.max(0,span-(span>8?3:span>3?1:0));let sum=0;
  for(const [value,color] of [[t.cached,"var(--blue)"],[Math.max(0,t.input-t.cached),"var(--teal)"],[t.output,"var(--orange)"]]){add(svg,"rect",{x,y:a.y(sum+value),width:w,height:Math.max(0,a.y(sum)-a.y(sum+value)),fill:color});sum+=value;}
  });
  const guide=add(svg,"rect",{x:0,y:a.top,width:0,height:a.bottom-a.top,fill:"var(--teal)",opacity:.12,"pointer-events":"none"});
@@ -66,8 +71,8 @@ function drawUsage(){
  picker.value=String(Math.min(Number(previous||v.intervals.length-1),v.intervals.length-1));
 }
 function drawQuota(){
- const v=view(),points=D.quota.filter(p=>p.t>=v.start&&p.t<=v.end),svg=$("quota-chart"),a=axes(svg,v.start,v.end,100,"剩余 (%)",215);
- const latest=D.quota.at(-1),codex=latest?.windows.find(w=>w.key==="codex:primary");
+ const v=view(),points=D.quota.filter(p=>p.t>=v.start&&(state.hours==="custom"?p.t<v.end:p.t<=v.end)),svg=$("quota-chart"),a=axes(svg,v.start,v.end,100,"剩余 (%)",215);
+ const latest=points.at(-1),codex=latest?.windows.find(w=>w.key==="codex:primary");
  $("quota-status").textContent=latest?"最近账号采样 "+date(latest.t)+" · 距面板更新 "+Math.max(0,Math.round((D.generatedAt-latest.t)/60000))+" 分钟"+(codex?" · Codex 剩余 "+codex.remaining+"%":""):"暂无额度历史；可在配置中指定原巡检记录目录。";
  $("quota-note").textContent="每小时巡检更新账号额度；本机 Token 由面板单独刷新。";
  const series=[...new Map(points.flatMap(p=>p.windows.map(w=>[w.key,w.name]))).entries()].sort((a,b)=>a[0].localeCompare(b[0]));
@@ -111,16 +116,17 @@ function render(){
  $("exclude-monitor").checked=state.excludeMonitor;$("exclude-internal").checked=state.excludeInternal;
  $("exclude-monitor").closest("label").hidden=!D.monitorId;
  document.querySelectorAll("[data-hours]").forEach(b=>b.setAttribute("aria-pressed",String(Number(b.dataset.hours)===state.hours)));
+ $("custom-range").disabled=false;$("custom-range").setAttribute("aria-pressed",String(state.hours==="custom"));
  const items=allTasks(),tot=M.sum(items),ranked=M.conversations(items);
  $("filter-empty").hidden=items.length>0;$("filter-empty").textContent="当前时间范围与筛选组合没有用量记录；已保留你的筛选，可更换时间范围、模型、推理强度或恢复全部。";
  $("total").textContent=compact(tot.total);$("total-exact").textContent=n(tot.total)+" Token";
  $("cache").textContent=percent(tot.cached,tot.input);$("output").textContent=compact(tot.output);$("reasoning").textContent="其中推理 "+n(tot.reasoning);$("count").textContent=ranked.length;
- $("range-label").textContent=date(v.start)+" — "+date(v.end)+" · "+zone()+" · 首尾小时可能不完整";
+ $("range-label").textContent=date(v.start)+" — "+date(v.end)+" · "+zone()+(state.hours==="custom"?" · 自定义范围（不含结束时间）":" · 首尾小时可能不完整");
  $("updated").textContent=D.machine+" · 本机数据更新于 "+date(D.generatedAt,true);
  $("mode").textContent=live?"每 "+D.refreshSeconds+" 秒刷新":"离线快照";
  $("refresh").hidden=!live;
  $("error").hidden=!D.warnings.length;$("error").textContent=D.warnings.join("；");
- const selected=(D.views["168"]||v).intervals.flatMap(i=>i.tasks).find(t=>t.id===state.task);
+ const selected=available.find(t=>t.id===state.task)||(D.views["168"]||v).intervals.flatMap(i=>i.tasks).find(t=>t.id===state.task);
  $("selection").hidden=!state.task;$("selected-task").textContent=state.task?"筛选对话："+(selected?.title||state.task):"";
  const max=ranked[0]?.total||1;
  const visibleRanked=rankingExpanded?ranked:ranked.slice(0,5);
@@ -138,29 +144,101 @@ function render(){
  drawUsage();drawQuota();
  if($("hour-dialog").open)openHour(Math.min(selectedHour,v.intervals.length-1),false);
 }
-async function load(force=false){
- if(!live||busy)return;busy=true;$("refresh").disabled=true;$("refresh").textContent=D?"刷新中…":"首次建立索引…";
- try{const response=await fetch("/api/data"+(force?"?force=1":""),{cache:"no-store"});const data=await response.json();if(!response.ok)throw Error(data.error||"读取失败");D=data;render();}
- catch(error){$("error").hidden=false;$("error").textContent="刷新失败"+(D?"，保留上次数据":"")+"："+error.message;}
- finally{busy=false;$("refresh").disabled=false;$("refresh").textContent="立即刷新";clearTimeout(timer);timer=setTimeout(()=>{if(document.hidden)schedule();else load();},(D?.refreshSeconds||60)*1000);}
+function activeRange(){
+ if(state.hours!=="custom")return null;
+ return state.customRange||{start:D.views.custom.start,end:D.views.custom.end};
 }
-function schedule(){clearTimeout(timer);timer=setTimeout(()=>{if(!document.hidden)load();else schedule();},(D?.refreshSeconds||60)*1000);}
+function rangeLoading(value){
+ rangePending=value;$("range-apply").disabled=value;$("range-start").disabled=value;$("range-end").disabled=value;
+ $("range-progress").hidden=!value;$("range-apply").textContent=value?"读取中…":live?"应用范围":"查看已保存范围";
+}
+function cancelLoad(){
+ requestId++;requestController?.abort();requestController=null;busy=false;
+ $("refresh").disabled=false;$("refresh").textContent="立即刷新";
+ if(rangePending)rangeLoading(false);
+ schedule();
+}
+function retainCustom(data){
+ const saved=D?.views.custom;
+ if(!data.views.custom&&saved){
+  data.views.custom=saved;
+  const points=new Map((D.quota||[]).filter(p=>p.t>=saved.start&&p.t<saved.end).map(p=>[p.t,p]));
+  for(const point of data.quota)points.set(point.t,point);
+  data.quota=[...points.values()].sort((a,b)=>a.t-b.t);
+ }
+ return data;
+}
+async function load(force=false,requestedRange=activeRange(),applyRange=false){
+ if(!live||(busy&&!applyRange))return;
+ const id=++requestId;requestController?.abort();requestController=new AbortController();
+ busy=true;clearTimeout(timer);$("refresh").disabled=true;$("refresh").textContent=D?"刷新中…":"首次建立索引…";
+ if(applyRange){rangeLoading(true);$("range-error").hidden=true;}
+ const params=new URLSearchParams();if(force)params.set("force","1");
+ if(requestedRange){params.set("start",String(requestedRange.start));params.set("end",String(requestedRange.end));}
+ try{
+  const response=await fetch("/api/data"+(params.size?"?"+params:""),{cache:"no-store",signal:requestController.signal});
+  const data=await response.json();if(id!==requestId)return;
+  if(!response.ok)throw Error(data.error||"读取失败");
+  if(requestedRange&&(!data.views.custom||data.views.custom.start!==requestedRange.start||data.views.custom.end!==requestedRange.end))throw Error("返回的时间范围不一致，请重试。");
+  D=retainCustom(data);
+  if(applyRange){state.hours="custom";state.customRange={...requestedRange};rankingExpanded=false;rangeLoading(false);$("range-dialog").close();}
+  render();
+ }catch(error){
+  if(id!==requestId||error.name==="AbortError")return;
+  const target=$(applyRange?"range-error":"error");target.hidden=false;
+  target.textContent=(applyRange?"读取所选范围失败，已保留原范围":"刷新失败"+(D?"，保留上次数据":""))+"："+error.message;
+ }finally{
+  if(id===requestId){busy=false;requestController=null;$("refresh").disabled=false;$("refresh").textContent="立即刷新";if(applyRange)rangeLoading(false);schedule();}
+ }
+}
+function schedule(){clearTimeout(timer);if(live)timer=setTimeout(()=>{if(!document.hidden)load();else schedule();},(D?.refreshSeconds||60)*1000);}
+function openRange(){
+ if(!D)return;
+ const saved=D.views.custom,range=state.customRange||(saved?{start:saved.start,end:saved.end}:view());
+ $("range-start").value=M.localDateTime(range.start,D.timezoneOffset);$("range-end").value=M.localDateTime(range.end,D.timezoneOffset);
+ const max=M.localDateTime(Date.now(),D.timezoneOffset);$("range-start").max=max;$("range-end").max=max;
+ $("range-start").readOnly=!live;$("range-end").readOnly=!live;
+ $("range-fields").hidden=!live&&!saved;$("range-apply").hidden=!live&&!saved;$("range-note").hidden=!live;
+ $("range-error").hidden=true;rangeLoading(false);
+ $("range-hint").textContent=live?"按"+zone()+"选择；包含开始时间，不包含结束时间。":"这是离线快照。"+(saved?"可查看已保存的自定义范围；":"")+"修改时间范围需回到本机动态面板。";
+ $("range-cancel").textContent=!live&&!saved?"知道了":"取消";
+ $("range-dialog").showModal();
+}
+function closeRange(){if(rangePending)cancelLoad();$("range-dialog").close();}
+function applyRange(event){
+ event.preventDefault();if(rangePending)return;
+ if(!live){
+  if(!D.views.custom)return;
+  state.hours="custom";state.customRange={start:D.views.custom.start,end:D.views.custom.end};$("range-dialog").close();updateFilters();return;
+ }
+ const start=M.parseLocalDateTime($("range-start").value,D.timezoneOffset),end=M.parseLocalDateTime($("range-end").value,D.timezoneOffset),error=M.rangeError(start,end);
+ $("range-error").hidden=!error;$("range-error").textContent=error;
+ if(error)return;
+ load(true,{start,end},true);
+}
+function selectPreset(hours){
+ const interrupted=busy;if(interrupted)cancelLoad();
+ state.hours=hours;updateFilters();if(interrupted)load();
+}
 function exportHTML(){
  if(!D)return;
  const clone=document.documentElement.cloneNode(true);
  clone.querySelector("#bootstrap").textContent=JSON.stringify({...D,ui:state}).replace(/</g,"\\u003c");
- clone.querySelector("#tooltip").hidden=true;clone.querySelector("#hour-dialog").removeAttribute("open");
+ clone.querySelector("#tooltip").hidden=true;clone.querySelector("#hour-dialog").removeAttribute("open");clone.querySelector("#range-dialog").removeAttribute("open");
  const content="<!doctype html>\n"+clone.outerHTML,blob=new Blob([content],{type:"text/html;charset=utf-8"}),url=URL.createObjectURL(blob),a=document.createElement("a");
- a.href=url;a.download="codex-"+(state.hours===168?"7days":"24hours")+"-"+new Date(D.generatedAt).toISOString().slice(0,10)+".html";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+ a.href=url;a.download="codex-"+(state.hours==="custom"?"custom-"+M.localDateTime(view().start,D.timezoneOffset).replace(/[:T]/g,"-")+"_"+M.localDateTime(view().end,D.timezoneOffset).replace(/[:T]/g,"-"):state.hours===168?"7days":"24hours")+"-"+new Date(D.generatedAt).toISOString().slice(0,10)+".html";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 function updateFilters(){rankingExpanded=false;render();}
 $("ranking-toggle").onclick=()=>{rankingExpanded=!rankingExpanded;render();};
-document.querySelectorAll("[data-hours]").forEach(b=>b.onclick=()=>{state.hours=Number(b.dataset.hours);updateFilters();});
+document.querySelectorAll("[data-hours]").forEach(b=>b.onclick=()=>selectPreset(Number(b.dataset.hours)));
+$("custom-range").onclick=openRange;$("range-form").onsubmit=applyRange;$("range-cancel").onclick=closeRange;
+$("range-dialog").oncancel=event=>{event.preventDefault();closeRange();};
+for(const id of ["range-start","range-end"])$(id).oninput=()=>{if(!rangePending){$("range-error").hidden=true;$("range-error").textContent="";}};
 $("model").onchange=()=>{state.model=$("model").value;updateFilters();};
 $("effort").onchange=()=>{state.effort=$("effort").value;updateFilters();};
 $("exclude-monitor").onchange=()=>{state.excludeMonitor=$("exclude-monitor").checked;updateFilters();};
 $("exclude-internal").onchange=()=>{state.excludeInternal=$("exclude-internal").checked;updateFilters();};
-$("reset").onclick=()=>{Object.assign(state,{hours:24,model:"",effort:"",excludeMonitor:false,excludeInternal:false,task:null});updateFilters();};
+$("reset").onclick=()=>{Object.assign(state,{model:"",effort:"",excludeMonitor:false,excludeInternal:false,task:null});selectPreset(24);};
 $("clear-task").onclick=()=>{state.task=null;updateFilters();};
 $("hour-open").onclick=()=>{if(D)openHour(Number($("hour-picker").value));};
 $("close-dialog").onclick=()=>$("hour-dialog").close();

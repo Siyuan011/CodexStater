@@ -299,5 +299,177 @@ class EffortStoreTest(unittest.TestCase):
         self.assertEqual(self.by_effort(store.snapshot(force=True, now=self.now))["ultra"]["total"], 125)
 
 
+class CustomRangeTest(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.root = Path(self.folder.name)
+        self.sessions = self.root / "sessions"
+        self.sessions.mkdir()
+        self.now = int(time.time() // 3600) * 3600 + 1800
+        self.config = dict(codex_root=str(self.root), cache_dir=str(self.root / "cache"),
+                           quota_dir=None, timezone_offset=480, timezone="+08:00", refresh_seconds=60)
+
+    def store(self):
+        store = UsageStore(self.config)
+        self.addCleanup(store.close)
+        return store
+
+    def stamp(self, when):
+        return datetime.fromtimestamp(when, timezone.utc).isoformat()
+
+    def event(self, when, cumulative, last):
+        def usage(value):
+            return dict(input_tokens=value, total_tokens=value)
+        return dict(timestamp=self.stamp(when), type="event_msg", payload=dict(type="token_count",
+                    info=dict(total_token_usage=usage(cumulative), last_token_usage=usage(last))))
+
+    def write(self, name, thread, created, events):
+        path = self.sessions / name
+        rows = [dict(type="session_meta", payload=dict(id=thread, timestamp=self.stamp(created))),
+                dict(type="turn_context", payload=dict(model="gpt-6-astra", effort="ultra")), *events]
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        return path
+
+    def total(self, data, view="custom"):
+        return sum(task["total"] for interval in data["views"][view]["intervals"] for task in interval["tasks"])
+
+    def test_custom_boundaries_partial_hours_and_exact_end_exclusion(self):
+        hour = self.now - 10 * 86400 - 1800
+        start, end = hour + 600.125, hour + 4500.250
+        times = [start - .001, start, hour + 3600, end - .001, end, end + .001]
+        rows = [self.event(when, (index + 1) * 100, 100) for index, when in enumerate(times)]
+        self.write("boundary.jsonl", "boundary", hour - 60, rows)
+        store = self.store()
+        selected = store.snapshot(now=self.now, start=start * 1000, end=end * 1000)
+        self.assertEqual(set(selected["views"]), {"24", "168", "custom"})
+        view = selected["views"]["custom"]
+        self.assertEqual((view["start"], view["end"]), (start * 1000, end * 1000))
+        self.assertEqual(view["hours"], (end - start) / 3600)
+        self.assertEqual(self.total(selected), 300)
+        self.assertEqual([(i["start"], i["end"]) for i in view["intervals"]],
+                         [(start * 1000, (hour + 3600) * 1000), ((hour + 3600) * 1000, end * 1000)])
+        self.assertEqual((view["firstEvent"], view["lastEvent"]), (start * 1000, (end - .001) * 1000))
+        next_range = store.snapshot(now=self.now, start=end * 1000, end=(end + 1) * 1000)
+        self.assertEqual(self.total(next_range), 200)
+        self.assertEqual(self.total(selected, "24"), 0)
+
+    def test_history_replays_skipped_and_indexed_logs_then_remains_incremental(self):
+        older, old = self.now - 30 * 86400, self.now - 20 * 86400
+        history = [self.event(old, 100, 100), self.event(self.now - 60, 150, 50)]
+        original = self.write("z-original.jsonl", "original", old - 60, history)
+        self.write("a-copy.jsonl", "fork", old + 60, history)
+        skipped = self.write("old-mtime.jsonl", "older", older - 60, [self.event(older, 200, 200)])
+        os.utime(skipped, (older, older))
+        first = UsageStore(self.config)
+        try:
+            regular = first.snapshot(force=True, now=self.now)
+            self.assertEqual(self.total(regular, "168"), 50)
+            self.assertEqual(first.db.execute("SELECT COUNT(*) FROM files").fetchone()[0], 2)
+            self.assertFalse(first.history_enabled)
+            # The custom request must bypass the two-second scan throttle.
+            full = first.snapshot(now=self.now, start=(older - 1) * 1000, end=self.now * 1000)
+            self.assertEqual(self.total(full), 350)
+            self.assertEqual(self.total(full, "168"), 50)
+            self.assertEqual({t["id"] for i in full["views"]["custom"]["intervals"] for t in i["tasks"]},
+                             {"original", "older"})
+            self.assertTrue(first.history_enabled)
+            idle = first.snapshot(force=True, now=self.now, start=(older - 1) * 1000, end=self.now * 1000)
+            self.assertEqual(idle["scan"]["bytesRead"], 0)
+            self.assertEqual(self.total(idle), 350)
+        finally:
+            first.close()
+        reopened = self.store()
+        self.assertTrue(reopened.history_enabled)
+        with original.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(self.event(self.now - 30, 175, 25)) + "\n")
+        updated = reopened.snapshot(force=True, now=self.now, start=(older - 1) * 1000, end=self.now * 1000)
+        self.assertEqual(self.total(updated), 375)
+        self.assertLess(updated["scan"]["bytesRead"], original.stat().st_size)
+        self.assertEqual(self.total(updated, "24"), 75)
+        # Refreshing a preset much later must not prune history after custom use.
+        reopened.snapshot(force=True, now=self.now + 10 * 86400)
+        again = reopened.snapshot(force=True, now=self.now + 10 * 86400,
+                                  start=(older - 1) * 1000, end=self.now * 1000)
+        self.assertEqual(self.total(again), 375)
+
+    def test_history_enabled_by_another_instance_is_never_pruned(self):
+        old = self.now - 20 * 86400
+        self.write("old.jsonl", "old", old - 60, [self.event(old, 100, 100)])
+        waiting = self.store()
+        indexing = self.store()
+        self.assertFalse(waiting.history_enabled)
+        indexing.snapshot(force=True, now=self.now, start=(old - 1) * 1000, end=self.now * 1000)
+        waiting.snapshot(force=True, now=self.now + 10)
+        self.assertTrue(waiting.history_enabled)
+        self.assertEqual(waiting.db.execute("SELECT SUM(total) FROM events").fetchone()[0], 100)
+        selected = indexing.snapshot(force=True, now=self.now + 20,
+                                     start=(old - 1) * 1000, end=self.now * 1000)
+        self.assertEqual(self.total(selected), 100)
+        self.assertEqual(selected["scan"]["bytesRead"], 0)
+
+    def test_epoch_range_with_negative_timezone_uses_floor_buckets(self):
+        self.config.update(timezone_offset=-330, timezone="-05:30")
+        self.write("epoch.jsonl", "epoch", 0, [self.event(600, 100, 100), self.event(1900, 150, 50)])
+        data = self.store().snapshot(now=self.now, start=0, end=3600 * 1000)
+        self.assertEqual(self.total(data), 150)
+        self.assertEqual([(i["start"], i["end"]) for i in data["views"]["custom"]["intervals"]],
+                         [(0, 1800 * 1000), (1800 * 1000, 3600 * 1000)])
+        self.assertEqual([sum(t["total"] for t in i["tasks"]) for i in data["views"]["custom"]["intervals"]], [100, 50])
+
+    def test_unreadable_history_keeps_recent_counts_and_retries(self):
+        old = self.now - 20 * 86400
+        path = self.write("retry.jsonl", "retry", old - 60,
+                          [self.event(old, 100, 100), self.event(self.now - 60, 150, 50)])
+        store = self.store()
+        store.snapshot(force=True, now=self.now)
+        real_open = Path.open
+        def unavailable(log, *args, **kwargs):
+            if log == path and args and args[0] == "rb":
+                raise PermissionError("temporarily unavailable")
+            return real_open(log, *args, **kwargs)
+        args = dict(force=True, now=self.now, start=(old - 1) * 1000, end=self.now * 1000)
+        with patch.object(Path, "open", unavailable):
+            failed = store.snapshot(**args)
+        self.assertEqual(self.total(failed), 50)
+        self.assertTrue(failed["warnings"])
+        self.assertFalse(json.loads(store.db.execute("SELECT state FROM files").fetchone()[0])["history_indexed"])
+        recovered = store.snapshot(**args)
+        self.assertEqual(self.total(recovered), 150)
+        self.assertEqual(recovered["warnings"], [])
+        self.assertTrue(json.loads(store.db.execute("SELECT state FROM files").fetchone()[0])["history_indexed"])
+
+    def test_historical_names_and_quota_cover_union_with_presets(self):
+        old = self.now - 20 * 86400
+        self.write("old.jsonl", "historic", old - 60, [self.event(old, 100, 100)])
+        self.config["quota_dir"] = str(self.root)
+        rows = [dict(captured_at_utc=self.stamp(when), windows=[])
+                for when in (old - 2, old, old + 2, self.now - 60)]
+        (self.root / "quota-history.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        store = self.store()
+        with patch.object(store, "task_names", return_value=({"historic": "旧任务"}, set())) as lookup:
+            data = store.snapshot(now=self.now, start=(old - 1) * 1000, end=(old + 1) * 1000)
+        self.assertEqual(lookup.call_args.args[0], {"historic"})
+        task = next(t for i in data["views"]["custom"]["intervals"] for t in i["tasks"])
+        self.assertEqual(task["title"], "旧任务")
+        self.assertEqual([p["t"] for p in data["quota"]], [old * 1000, (self.now - 60) * 1000])
+
+    def test_invalid_ranges_do_not_scan_and_maximum_is_inclusive(self):
+        store = self.store()
+        end = self.now * 1000
+        invalid = [(None, end), (end - 1000, None), ("", end), ("nan", end),
+                   (end - 1000, "inf"), (-1, end), (end, end), (end + 1, end),
+                   (end - 367 * 86400 * 1000, end), (end, end + 61000)]
+        with patch.object(store, "refresh") as refresh:
+            for start, finish in invalid:
+                with self.subTest(start=start, end=finish), self.assertRaises(ValueError):
+                    store.snapshot(now=self.now, start=start, end=finish)
+            refresh.assert_not_called()
+        accepted = store.snapshot(now=self.now, start=end - 366 * 86400 * 1000, end=end)
+        self.assertEqual(accepted["views"]["custom"]["hours"], 366 * 24)
+        tolerated = store.snapshot(now=self.now, start=end - 1000, end=end + 60000)
+        self.assertEqual(tolerated["views"]["custom"]["end"], end + 60000)
+
+
 if __name__=="__main__":
     unittest.main()

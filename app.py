@@ -113,8 +113,15 @@ def serve(config):
                 return self.data(200, dict(app=APP_ID, signature=config["signature"], pid=os.getpid()))
             if parsed.path == "/api/data":
                 try:
-                    query = urllib.parse.parse_qs(parsed.query)
-                    return self.data(200, store.snapshot(force=query.get("force") == ["1"]))
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    for key in ("start", "end"):
+                        if key in query and len(query[key]) != 1:
+                            raise ValueError("开始时间和结束时间只能各选择一次")
+                    start = query["start"][0] if "start" in query else None
+                    end = query["end"][0] if "end" in query else None
+                    return self.data(200, store.snapshot(force=query.get("force") == ["1"], start=start, end=end))
+                except ValueError as error:
+                    return self.data(400, {"error": str(error)})
                 except Exception as error:
                     print("数据刷新失败：" + str(error), file=sys.stderr, flush=True)
                     return self.data(500, {"error": "刷新失败：" + str(error)})

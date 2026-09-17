@@ -16,6 +16,29 @@ KEYS = dict(input="input_tokens", cached="cached_input_tokens",
             output="output_tokens", reasoning="reasoning_output_tokens", total="total_tokens")
 
 
+def custom_range(start, end, now):
+    """Validate API milliseconds before scanning or constructing hourly buckets."""
+    if start is None and end is None:
+        return None
+    if start is None or end is None:
+        raise ValueError("请同时选择开始时间和结束时间")
+    try:
+        start, end = float(start), float(end)
+    except (ValueError, TypeError, OverflowError):
+        raise ValueError("开始时间和结束时间必须是有效时间") from None
+    if not math.isfinite(start) or not math.isfinite(end):
+        raise ValueError("开始时间和结束时间必须是有效时间")
+    if start < 0:
+        raise ValueError("开始时间不能早于 1970 年")
+    if start >= end:
+        raise ValueError("结束时间必须晚于开始时间")
+    if end - start > 366 * 86400 * 1000:
+        raise ValueError("单次最多选择 366 天")
+    if end / 1000 > now + 60:
+        raise ValueError("结束时间不能晚于当前时间")
+    return start / 1000, end / 1000
+
+
 def timestamp(value):
     date = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if date.tzinfo is None:
@@ -81,6 +104,7 @@ class UsageStore:
             if "effort" not in columns:
                 self.db.execute("ALTER TABLE events ADD COLUMN effort TEXT NOT NULL DEFAULT 'unknown'")
             self.db.execute("INSERT OR REPLACE INTO meta VALUES('schema_version',?)", (str(SCHEMA_VERSION),))
+        self.history_enabled = bool(self.db.execute("SELECT 1 FROM meta WHERE key='history_enabled'").fetchone())
         self.last_scan = 0
         self.last_result = {}
         self.initialized = bool(self.db.execute("SELECT 1 FROM meta WHERE key='initialized'").fetchone())
@@ -88,13 +112,13 @@ class UsageStore:
     def close(self):
         self.db.close()
 
-    def refresh(self, force=False, now=None):
+    def refresh(self, force=False, now=None, full_history=False):
         with self.lock:
             now = time.time() if now is None else now
-            if not force and self.last_scan and now - self.last_scan < 2:
+            history = full_history or self.history_enabled
+            if not force and not (history and not self.history_enabled) and self.last_scan and now - self.last_scan < 2:
                 return self.last_result
             started = time.monotonic()
-            cutoff = now - 8 * 86400
             changed = read_bytes = inserted = 0
             warnings = []
             paths = []
@@ -104,26 +128,31 @@ class UsageStore:
                     paths.extend(directory.rglob("*.jsonl"))
             self.db.execute("BEGIN IMMEDIATE")
             try:
+                # Other running instances (including HTML export) share this cache.
+                # Once any instance enables history, no instance may prune it again.
+                history = history or bool(self.db.execute("SELECT 1 FROM meta WHERE key='history_enabled'").fetchone())
+                cutoff = float("-inf") if history else now - 8 * 86400
                 for path in sorted(paths):
                     try:
                         stat = path.stat()
                         old = self.db.execute("SELECT size,mtime,state FROM files WHERE path=?", (str(path),)).fetchone()
                         old_state = json.loads(old[2]) if old else None
                         backfill = bool(old_state and old_state.get("index_version", 1) < SCHEMA_VERSION)
-                        if old and not backfill and old[0] == stat.st_size and old[1] == stat.st_mtime_ns:
+                        replay = backfill or bool(history and old_state and not old_state.get("history_indexed"))
+                        if old and not replay and old[0] == stat.st_size and old[1] == stat.st_mtime_ns:
                             continue
                         if not old and stat.st_mtime < cutoff:
                             continue
                         changed += 1
-                        state = old_state if old and not backfill else {
+                        state = old_state if old and not replay else {
                             "offset": 0, "thread": path.stem, "model": "unknown", "effort": "unknown",
                             "project": "", "previous": None,
-                            "created": old_state.get("created", stat.st_mtime) if backfill else stat.st_mtime,
-                            "index_version": SCHEMA_VERSION}
-                        if not backfill and (stat.st_size < state["offset"] or (old and old[0] == stat.st_size)):
+                            "created": old_state.get("created", stat.st_mtime) if replay else stat.st_mtime,
+                            "index_version": SCHEMA_VERSION, "history_indexed": history}
+                        if not replay and (stat.st_size < state["offset"] or (old and old[0] == stat.st_size)):
                             state = dict(offset=0, thread=path.stem, model="unknown", effort="unknown",
                                          project="", previous=None, created=stat.st_mtime,
-                                         index_version=SCHEMA_VERSION)
+                                         index_version=SCHEMA_VERSION, history_indexed=history)
                             warnings.append("检测到日志替换，重新读取并去重：" + path.name)
                         with path.open("rb") as stream:
                             stream.seek(state["offset"])
@@ -185,7 +214,10 @@ class UsageStore:
                                         (str(path), stat.st_size, stat.st_mtime_ns, json.dumps(state)))
                     except OSError:
                         warnings.append("日志暂时无法读取：" + path.name)
-                self.db.execute("DELETE FROM events WHERE ts<?", (cutoff,))
+                if not history:
+                    self.db.execute("DELETE FROM events WHERE ts<?", (cutoff,))
+                else:
+                    self.db.execute("INSERT OR REPLACE INTO meta VALUES('history_enabled','1')")
                 self.db.execute("INSERT OR REPLACE INTO meta VALUES('initialized','1')")
                 self.db.commit()
             except BaseException:
@@ -193,6 +225,7 @@ class UsageStore:
                 raise
             first = not self.initialized
             self.initialized = True
+            self.history_enabled = history
             self.last_scan = now
             self.last_result = dict(scannedAt=now * 1000, initial=first, filesChanged=changed,
                                     bytesRead=read_bytes, seconds=round(time.monotonic() - started, 3),
@@ -266,22 +299,28 @@ class UsageStore:
             issues.append("暂时无法读取额度历史文件")
         return sorted({p["t"]: p for p in points}.values(), key=lambda p: p["t"]), sorted(set(issues))
 
-    def view(self, hours, now, names, internal):
-        start = now - hours * 3600
+    def view(self, hours, now, names, internal, start=None, inclusive_end=True):
+        start = now - hours * 3600 if start is None else start
+        end_operator = "<=" if inclusive_end else "<"
         shift = self.config["timezone_offset"] * 60
         query = """
-          SELECT CAST((ts+?)/3600 AS INTEGER)*3600-? AS bucket,thread,model,effort,project,
+          WITH selected AS (
+            SELECT *, (ts+?)/3600.0 AS local_hour
+            FROM events WHERE ts>=? AND ts{end_operator}?
+          )
+          SELECT (CAST(local_hour AS INTEGER) - (local_hour < CAST(local_hour AS INTEGER)))*3600-?
+                 AS bucket,thread,model,effort,project,
                  SUM(input),SUM(cached),SUM(output),SUM(reasoning),SUM(total)
-          FROM events WHERE ts>=? AND ts<=? GROUP BY bucket,thread,model,effort,project
+          FROM selected GROUP BY bucket,thread,model,effort,project
           ORDER BY bucket,thread,model,effort
         """
         buckets = {}
-        for row in self.db.execute(query, (shift, shift, start, now)):
+        for row in self.db.execute(query.format(end_operator=end_operator), (shift, start, now, shift)):
             task = dict(id=row[1], title=names.get(row[1], "会话 · " + row[1][:8]), model=row[2],
                         effort=row[3], project=row[4], internal=row[1] in internal or row[2] == "codex-auto-review",
                         **dict(zip(FIELDS, row[5:])))
             buckets.setdefault(row[0], []).append(task)
-        earliest, latest = self.db.execute("SELECT MIN(ts),MAX(ts) FROM events WHERE ts>=? AND ts<=?", (start, now)).fetchone()
+        earliest, latest = self.db.execute("SELECT MIN(ts),MAX(ts) FROM events WHERE ts>=? AND ts" + end_operator + "?", (start, now)).fetchone()
         result = []
         bucket = math.floor((start + shift) / 3600) * 3600 - shift
         while bucket < now:
@@ -292,15 +331,31 @@ class UsageStore:
                     firstEvent=earliest * 1000 if earliest is not None else None,
                     lastEvent=latest * 1000 if latest is not None else None)
 
-    def snapshot(self, force=False, now=None):
+    def snapshot(self, force=False, now=None, start=None, end=None):
+        now = time.time() if now is None else now
+        selected = custom_range(start, end, now)
         with self.lock:
-            now = time.time() if now is None else now
-            scan = self.refresh(force, now)
-            ids = {row[0] for row in self.db.execute("SELECT DISTINCT thread FROM events WHERE ts>=? AND ts<=?", (now - 7 * 86400, now))}
+            scan = self.refresh(force, now, full_history=selected is not None)
+            coverage_start = min(now - 7 * 86400, selected[0]) if selected else now - 7 * 86400
+            coverage_end = max(now, selected[1]) if selected else now
+            id_query = "SELECT DISTINCT thread FROM events WHERE (ts>=? AND ts<=?)"
+            id_params = (now - 7 * 86400, now)
+            if selected:
+                id_query += " OR (ts>=? AND ts<?)"
+                id_params += selected
+            ids = {row[0] for row in self.db.execute(id_query, id_params)}
             names, internal = self.task_names(ids)
-            quota, warnings = self.quota_history(now - 7 * 86400, now)
+            quota, warnings = self.quota_history(coverage_start, coverage_end)
+            if selected:
+                quota = [point for point in quota
+                         if now - 7 * 86400 <= point["t"] / 1000 <= now
+                         or selected[0] <= point["t"] / 1000 < selected[1]]
+            views = {str(hours): self.view(hours, now, names, internal) for hours in (24, 168)}
+            if selected:
+                range_start, range_end = selected
+                views["custom"] = self.view((range_end - range_start) / 3600, range_end, names, internal,
+                                            start=range_start, inclusive_end=False)
             return dict(version=1, generatedAt=now * 1000, machine=platform.node(),
                         timezone=self.config["timezone"], timezoneOffset=self.config["timezone_offset"],
                         refreshSeconds=self.config["refresh_seconds"], monitorId=self.config.get("monitor_thread_id", ""),
-                        views={str(hours): self.view(hours, now, names, internal) for hours in (24, 168)},
-                        quota=quota, scan=scan, warnings=scan["warnings"] + warnings)
+                        views=views, quota=quota, scan=scan, warnings=scan["warnings"] + warnings)

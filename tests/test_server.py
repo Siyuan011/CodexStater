@@ -11,6 +11,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+import urllib.parse
 
 APP = Path(__file__).resolve().parents[1] / "app.py"
 
@@ -75,6 +76,22 @@ class ServerTest(unittest.TestCase):
                     self.assertEqual({row["effort"] for row in rows}, {"medium", "ultra"})
                     self.assertEqual(sum(row["total"] for row in rows), 480)
                     self.assertEqual(sum(row["total"] for row in rows if row["effort"] == "ultra"), 360)
+                params = urllib.parse.urlencode(dict(start=round((now - 90) * 1000), end=round(now * 1000)))
+                with opener.open(base + "/api/data?" + params) as response:
+                    custom = json.load(response)
+                self.assertEqual(set(custom["views"]), {"24", "168", "custom"})
+                selected = [task for interval in custom["views"]["custom"]["intervals"] for task in interval["tasks"]]
+                self.assertEqual(sum(row["total"] for row in selected), 360)
+                self.assertEqual({row["effort"] for row in selected}, {"ultra"})
+                for query in ("start=1", "end=2", "start=&end=2", "start=nan&end=2",
+                              "start=1&end=inf", "start=2&end=2", "start=-1&end=2",
+                              "start=1&start=2&end=3", "start=1&end=2&end=3",
+                              "start=0&end=99999999999999999999999",
+                              urllib.parse.urlencode(dict(start=round(now * 1000), end=round((now + 3600) * 1000)))):
+                    with self.subTest(query=query), self.assertRaises(urllib.error.HTTPError) as failure:
+                        opener.open(base + "/api/data?" + query)
+                    self.assertEqual(failure.exception.code, 400)
+                    self.assertTrue(json.load(failure.exception)["error"])
                 for suffix, headers in [("/../config.json",{}),("/api/data",{"Origin":"http://unrelated.example"})]:
                     with self.assertRaises(urllib.error.HTTPError) as failure:
                         opener.open(urllib.request.Request(base+suffix,headers=headers))

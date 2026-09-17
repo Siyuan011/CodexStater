@@ -15,6 +15,27 @@ function usageScale(peak){
  const steps=Math.max(4,Math.ceil((Number.isFinite(peak)&&peak>0?peak:0)/tick));
  return{tick,steps,max:steps*tick,height:70+steps*pixelsPerStep};
 }
-const api={sum,effort,effortLabel,modelEffortLabel,filter,conversations,byModelEffort,breakdown,usageScale};
+function localDateTime(timestamp,offset){
+ if(!Number.isFinite(timestamp)||!Number.isFinite(offset))return "";
+ return new Date(timestamp+offset*60000).toISOString().slice(0,16);
+}
+function parseLocalDateTime(value,offset){
+ const match=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+ if(!match||!Number.isFinite(offset))return NaN;
+ const [,year,month,day,hour,minute]=match.map(Number);
+ if(year<1||month<1||month>12||day<1||day>31||hour>23||minute>59)return NaN;
+ const date=new Date(0);date.setUTCFullYear(year,month-1,day);date.setUTCHours(hour,minute,0,0);
+ if(date.toISOString().slice(0,16)!==value)return NaN;
+ return date.getTime()-offset*60000;
+}
+function rangeError(start,end,now=Date.now()){
+ if(!Number.isFinite(start)||!Number.isFinite(end))return "请填写有效的开始和结束日期、时间。";
+ if(start<0)return "开始时间不能早于 1970 年。";
+ if(start>=end)return "结束时间必须晚于开始时间。";
+ if(end-start>366*86400000)return "单次最多查询 366 天，请缩短时间范围。";
+ if(end>now+60000)return "结束时间不能晚于当前时间。";
+ return "";
+}
+const api={sum,effort,effortLabel,modelEffortLabel,filter,conversations,byModelEffort,breakdown,usageScale,localDateTime,parseLocalDateTime,rangeError};
 if(typeof module!=="undefined"&&module.exports)module.exports=api;else root.StaterMath=api;
 })(typeof window!=="undefined"?window:globalThis);

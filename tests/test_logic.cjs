@@ -96,3 +96,24 @@ for(const peak of [2500000,10000000,10000001,25000000,100000000]){
  assert.equal(scale.max/scale.steps,2500000);
 }
 console.log('Fixed 2.5M tick size, 10M minimum and invariant pixels per Token: OK');
+
+// Inputs use the dashboard timezone, independent of the browser's timezone.
+const customStart=Date.UTC(2026,8,15,16,30),customEnd=Date.UTC(2026,8,17,6,0);
+assert.equal(M.localDateTime(customStart,480),'2026-09-16T00:30');
+assert.equal(M.parseLocalDateTime('2026-09-16T00:30',480),customStart);
+assert.equal(M.localDateTime(customStart,-420),'2026-09-15T09:30');
+assert.equal(M.parseLocalDateTime('2026-09-15T09:30',-420),customStart);
+assert.equal(M.parseLocalDateTime('2026-01-01T00:30',480),Date.UTC(2025,11,31,16,30));
+assert.equal(M.parseLocalDateTime('2024-02-29T12:00',330),Date.UTC(2024,1,29,6,30));
+assert.equal(M.parseLocalDateTime('1969-12-31T17:00',-420),0);
+for(const value of ['', '2026-02-29T12:00','2026-04-31T00:00','2026-13-01T00:00','2026-09-16T24:00','2026-09-16T12:60','2026-09-16','not a date'])assert(Number.isNaN(M.parseLocalDateTime(value,480)),value);
+assert.equal(M.rangeError(customStart,customEnd,customEnd),'');
+assert(M.rangeError(NaN,customEnd,customEnd));
+assert(M.rangeError(customEnd,customEnd,customEnd));
+assert(M.rangeError(customEnd,customStart,customEnd));
+assert(M.rangeError(-1,customEnd,customEnd));
+assert.equal(M.rangeError(customEnd-366*86400000,customEnd,customEnd),'');
+assert(M.rangeError(customEnd-366*86400000-1,customEnd,customEnd));
+assert.equal(M.rangeError(customStart,customEnd+60000,customEnd),'');
+assert(M.rangeError(customStart,customEnd+60001,customEnd));
+console.log('Custom range timezone conversion, calendar validation, ordering and 366-day limit: OK');

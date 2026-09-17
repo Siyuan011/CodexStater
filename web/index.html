@@ -7,7 +7,7 @@
 <header><div><h1>Codex 本机用量</h1><div id="updated" class="muted small">正在准备最近 7 天的数据…</div></div><div class="actions"><span id="mode" class="badge">本机动态面板</span><button id="refresh">立即刷新</button><button id="export">导出 HTML</button></div></header>
 <div id="error" role="alert" hidden></div>
 <div class="toolbar">
-<div class="range-group" aria-label="时间范围"><button data-hours="24" aria-pressed="true">过去 24 小时</button><button data-hours="168" aria-pressed="false">过去 7 天</button></div>
+<div class="range-group" aria-label="时间范围"><button data-hours="24" aria-pressed="true">过去 24 小时</button><button data-hours="168" aria-pressed="false">过去 7 天</button><button id="custom-range" aria-pressed="false" aria-haspopup="dialog" aria-controls="range-dialog" disabled>自定义时间范围</button></div>
 <label>模型 <select id="model"><option value="">全部模型</option></select></label>
 <label>推理强度 <select id="effort"><option value="">全部强度</option></select></label>
 <label><input type="checkbox" id="exclude-monitor">排除本统计任务</label>
@@ -51,7 +51,7 @@
 <p id="coverage"></p><p id="scan-info"></p>
 <ul><li>本机用量按日志事件发生时间汇总。输入包含缓存输入，输出包含推理输出，子项不重复相加；Token 不能直接换算订阅额度或费用。</li>
 <li>直接回溯已有日志，与原来每小时巡检按“发现时间”记录的数值可能不同。缺失、迁移或尚未落盘的事件会影响完整性。</li>
-<li>24 小时与 7 天都是截至更新时间的滚动窗口。首尾小时可能不完整，按窗口内真实事件计数。</li>
+<li>24 小时与 7 天都是截至更新时间的滚动窗口。自定义时间范围固定不滚动，包含开始时间、不包含结束时间；首尾小时按范围内真实事件计数。单次最多查询 366 天。</li>
 <li>每小时明细按对话合并，保留模型与推理强度的对应关系；用量筛选同时作用于总览、分组比较、用量图表、明细和排行。</li>
 <li>推理强度按日志记录统计，中途换档按各次用量归属；缺失强度显示“未记录”。Ultra 与 Max 分开统计，用量不能证明质量或速度差异。</li>
 <li>账号额度来自原巡检保存的记录，更新频率仍为每小时；额度窗口变化处断开曲线。面板不调用账号接口、模型或 API。</li>
@@ -62,5 +62,13 @@
 </main>
 <div id="tooltip" role="tooltip" hidden></div>
 <dialog id="hour-dialog"><div class="panel-head"><div><h2 id="hour-title">小时明细</h2><p id="hour-summary" class="muted"></p></div><button id="close-dialog" aria-label="关闭小时明细">关闭</button></div><div class="table-wrap"><table><thead><tr><th>对话</th><th class="num">Token</th><th class="num mobile-hide">缓存输入</th><th class="num mobile-hide">输出</th><th class="num">占比</th></tr></thead><tbody id="hour-table"></tbody></table></div></dialog>
+<dialog id="range-dialog" aria-labelledby="range-title" aria-describedby="range-hint">
+<form id="range-form" novalidate>
+<div class="range-dialog-heading"><span class="range-eyebrow">按指定时段查看</span><h2 id="range-title">自定义时间范围</h2><p id="range-hint" class="small muted"></p></div>
+<div id="range-fields" class="range-fields"><label for="range-start">开始时间<input type="datetime-local" id="range-start" step="60" required></label><label for="range-end">结束时间<input type="datetime-local" id="range-end" step="60" required></label></div>
+<p id="range-note" class="small muted">单次最多 366 天；首次查询较早记录可能需要稍等。</p>
+<p id="range-error" class="small" role="alert" hidden></p><p id="range-progress" class="small" role="status" hidden>正在查询历史用量，首次读取可能需要稍等…</p>
+<div class="range-dialog-actions"><button id="range-cancel" type="button">取消</button><button id="range-apply" type="submit" class="primary">应用范围</button></div>
+</form></dialog>
 <script id="bootstrap" type="application/json">__BOOTSTRAP__</script><script>/*__SCRIPT__*/</script>
 </body></html>
