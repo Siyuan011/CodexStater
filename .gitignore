@@ -15,3 +15,13 @@ config.local.json
 config.backup-*.json
 
 account-data/
+# Local monitor runtime data
+/*-history.jsonl
+/quota-errors.jsonl
+/latest-response.json
+/local-monitor-status.json
+/local-monitor.lock
+/最新额度.md
+/最新本机用量.md
+/本机用量.md
+/*.md.tmp
