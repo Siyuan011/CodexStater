@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [ValidateSet('launch', 'stop', 'export')]
+    [ValidateSet('launch', 'stop', 'export', 'Install', 'Status', 'Pause', 'Resume', 'Remove')]
     [string]$Action = 'launch',
     [string]$Config = '',
     [string]$CodexRoot = '',
@@ -11,7 +11,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$projectRoot = $PSScriptRoot
+$projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $userDirectory = [Environment]::GetFolderPath('UserProfile')
 
@@ -102,7 +102,7 @@ function Find-CodexRoot {
     }
     $candidates = @()
     if ($settings.PSObject.Properties['codex_root'] -and -not [string]::IsNullOrWhiteSpace([string]$settings.codex_root)) {
-        $configured = Resolve-LocalPath ([string]$settings.codex_root) (Split-Path -Parent $configPath)
+        $configured = Resolve-LocalPath ([string]$settings.codex_root) $projectRoot
         # Stopping must still work if the original data directory has moved.
         if ($Action -eq 'stop' -or (Test-Path -LiteralPath $configured -PathType Container)) { return $configured }
         Write-Warning "配置中的数据目录已不存在，将自动检测本机目录：$configured"
@@ -135,20 +135,24 @@ function Find-CodexRoot {
 }
 
 try {
-    if ([string]::IsNullOrWhiteSpace($Config)) { $Config = 'config.json' }
+    if ([string]::IsNullOrWhiteSpace($Config)) { $Config = 'config/config.json' }
     $configPath = Resolve-LocalPath $Config $projectRoot
     $stateHasher = [Security.Cryptography.SHA256]::Create()
     try { $configKey = [BitConverter]::ToString($stateHasher.ComputeHash($utf8.GetBytes($configPath.ToLowerInvariant()))).Replace('-', '').Substring(0, 24) }
     finally { $stateHasher.Dispose() }
-    $launcherStatePath = Join-Path $projectRoot ('.cache\launcher-state-' + $configKey + '.json')
+    $launcherStatePath = Join-Path $projectRoot ('cache\launcher-state-' + $configKey + '.json')
     $configExists = Test-Path -LiteralPath $configPath -PathType Leaf
     if ($configExists) {
         $settings = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
     }
     else {
-        $settings = Get-Content -LiteralPath (Join-Path $projectRoot 'config.example.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $settings = Get-Content -LiteralPath (Join-Path $projectRoot 'config/config.example.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     }
     if ($null -eq $settings -or $settings -isnot [pscustomobject]) { throw '配置文件必须是 JSON 对象。' }
+    if ($Action -in @('Status','Pause','Resume','Remove') -and -not $Check) {
+        & (Join-Path $projectRoot 'src/monitor/manage.ps1') -Action $Action -ConfigPath $configPath
+        exit 0
+    }
     $pythonPath = Find-Python
     $dataRoot = Find-CodexRoot
     if ($Check) {
@@ -156,10 +160,20 @@ try {
         exit 0
     }
     if (-not $configExists -and -not (Test-Path -LiteralPath $configPath -PathType Leaf)) { Save-LocalConfig }
-    $appArguments = @((Join-Path $projectRoot 'app.py'), $Action, '--config', $configPath, '--codex-root', $dataRoot)
+    if ($Action -eq 'Install') {
+        $settings | Add-Member -NotePropertyName codex_root -NotePropertyValue $dataRoot -Force
+        Save-LocalConfig
+        & (Join-Path $projectRoot 'src/monitor/manage.ps1') -Action $Action -PythonPath $pythonPath -ConfigPath $configPath
+        exit 0
+    }
+    $appArguments = @((Join-Path $projectRoot 'src/dashboard/app.py'), $Action, '--config', $configPath, '--codex-root', $dataRoot)
     if ($Action -eq 'launch' -and $NoBrowser) { $appArguments += '--no-browser' }
     if ($Action -eq 'export') {
-        $reportPath = Join-Path $projectRoot '最新用量报告.html'
+        $exportSetting = 'exports'
+        if ($settings.PSObject.Properties['export_dir'] -and $settings.export_dir) { $exportSetting = [string]$settings.export_dir }
+        $exportDir = Resolve-LocalPath $exportSetting $projectRoot
+        $null = [IO.Directory]::CreateDirectory($exportDir)
+        $reportPath = Join-Path $exportDir '最新用量报告.html'
         $appArguments += @('--output', $reportPath)
     }
     Write-Host "Python：$pythonPath"
@@ -181,7 +195,7 @@ try {
 catch {
     $errorText = $_.Exception.Message
     try {
-        $logDirectory = Join-Path $projectRoot '.cache'
+        $logDirectory = Join-Path $projectRoot 'logs'
         $null = [IO.Directory]::CreateDirectory($logDirectory)
         [IO.File]::WriteAllText((Join-Path $logDirectory 'launcher-error.txt'), $errorText, $utf8)
     }

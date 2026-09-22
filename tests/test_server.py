@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"src/statistics"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"src/dashboard"))
 import json
 from datetime import datetime, timezone
 import re
@@ -13,7 +17,7 @@ import urllib.error
 import urllib.request
 import urllib.parse
 
-APP = Path(__file__).resolve().parents[1] / "app.py"
+APP = Path(__file__).resolve().parents[1] / "src/dashboard/app.py"
 
 
 class ServerTest(unittest.TestCase):

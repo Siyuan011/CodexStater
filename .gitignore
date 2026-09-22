@@ -25,3 +25,10 @@ account-data/
 /最新本机用量.md
 /本机用量.md
 /*.md.tmp
+
+/data/
+/logs/
+/cache/
+/exports/
+/config/config.json
+/config/config.backup-*.json

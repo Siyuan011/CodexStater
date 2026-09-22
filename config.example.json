@@ -1,9 +1,0 @@
-{
-  "codex_root": "",
-  "quota_dir": "",
-  "cache_dir": ".cache",
-  "port": 8766,
-  "refresh_seconds": 60,
-  "timezone": "+08:00",
-  "monitor_thread_id": ""
-}

@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const M=require('../web/logic.js');
+const M=require('../src/dashboard/web/logic.js');
 const tasks=Array.from({length:12},(_,i)=>({id:'t'+i,title:'Task '+i,model:'a',input:10+i,cached:5,output:2,reasoning:1,total:12+i,internal:i===0}));
 tasks.push({...tasks[1],model:'b'});
 const b=M.breakdown(tasks);

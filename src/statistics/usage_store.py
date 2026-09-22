@@ -110,7 +110,7 @@ class UsageStore:
             self.db.execute("INSERT OR REPLACE INTO meta VALUES('schema_version',?)", (str(SCHEMA_VERSION),))
         self.history_enabled = bool(self.db.execute("SELECT 1 FROM meta WHERE key='history_enabled'").fetchone())
         # User annotations are durable data, separate from the disposable log cache.
-        account_dir = cache.parent / "account-data"
+        account_dir = Path(config.get("account_data_dir") or cache.parent / "account-data")
         account_dir.mkdir(parents=True, exist_ok=True)
         self.db.execute("ATTACH DATABASE ? AS attribution", (str(account_dir / ("accounts-" + identity + ".sqlite")),))
         self.db.executescript("""

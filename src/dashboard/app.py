@@ -18,6 +18,9 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'statistics'))
+from settings import ROOT, DEFAULT_CONFIG, load
 from usage_store import UsageStore, AccountConflict
 
 BASE = Path(__file__).resolve().parent
@@ -27,15 +30,17 @@ HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 def load_config(path, args):
     path = path.expanduser().resolve()
-    config = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
-    parent = path.parent
+    config = load(path)
+    parent = ROOT
     def resolve(value):
         p = Path(os.path.expandvars(value)).expanduser()
         return str((parent / p).resolve()) if not p.is_absolute() else str(p.resolve())
     config["codex_root"] = resolve(str(args.codex_root or config.get("codex_root") or os.environ.get("CODEX_HOME") or Path.home() / ".codex"))
     quota = args.quota_dir if args.quota_dir is not None else config.get("quota_dir")
     config["quota_dir"] = resolve(str(quota)) if quota else None
-    config["cache_dir"] = resolve(config.get("cache_dir") or ".cache")
+    config["cache_dir"] = resolve(config.get("cache_dir") or "cache/dashboard")
+    config["account_data_dir"] = str(Path(resolve(config.get("data_dir", "data"))) / "account-data") if config.get("data_dir") or path == DEFAULT_CONFIG.resolve() else str(Path(config["cache_dir"]).parent / "account-data")
+    config["export_dir"] = resolve(config.get("export_dir") or "exports")
     config["port"] = args.port or int(config.get("port", 8766))
     config["refresh_seconds"] = int(config.get("refresh_seconds", 60))
     config["timezone"] = config.get("timezone", "+08:00")
@@ -48,7 +53,7 @@ def load_config(path, args):
     if not 5 <= config["refresh_seconds"] <= 86400:
         raise ValueError("刷新间隔应在 5–86400 秒之间")
     config["config_path"] = str(path)
-    signature = {key: config.get(key) for key in ("codex_root", "quota_dir", "cache_dir", "refresh_seconds", "timezone", "monitor_thread_id")}
+    signature = {key: config.get(key) for key in ("codex_root", "quota_dir", "cache_dir", "account_data_dir", "refresh_seconds", "timezone", "monitor_thread_id")}
     config["signature"] = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
     return config
 
@@ -182,13 +187,13 @@ def launch(config, args):
             child = subprocess.Popen(command, cwd=BASE, stdout=log, stderr=log, **options)
         for _ in range(50):
             if child.poll() is not None:
-                raise RuntimeError("服务启动失败，请查看 .cache/server.log")
+                raise RuntimeError("服务启动失败，请查看 cache/dashboard/server.log")
             time.sleep(0.2)
             running = health(config)
             if running:
                 break
         if not running:
-            raise RuntimeError("启动超时，请查看 .cache/server.log")
+            raise RuntimeError("启动超时，请查看 cache/dashboard/server.log")
     url = "http://127.0.0.1:%d" % config["port"]
     if not args.no_browser:
         webbrowser.open(url)
@@ -213,11 +218,11 @@ def main():
         sys.stderr.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Codex 本机实时用量面板")
     parser.add_argument("command", nargs="?", choices=["launch", "serve", "export", "stop"], default="launch")
-    parser.add_argument("--config", type=Path, default=BASE / "config.json")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--codex-root", type=Path)
     parser.add_argument("--quota-dir", type=Path)
     parser.add_argument("--port", type=int)
-    parser.add_argument("--output", type=Path, default=BASE / "最新用量报告.html")
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     try:
@@ -232,7 +237,7 @@ def main():
             store = UsageStore(config)
             try:
                 report = page(store.snapshot(force=True))
-                output = args.output.expanduser().resolve()
+                output = (args.output or Path(config["export_dir"]) / "最新用量报告.html").expanduser().resolve()
                 output.parent.mkdir(parents=True, exist_ok=True)
                 output.write_text(report, encoding="utf-8")
                 print(json.dumps(dict(status="ok", html=str(output)), ensure_ascii=False))

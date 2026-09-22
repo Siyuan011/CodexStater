@@ -124,11 +124,13 @@ def export(db, out):
     os.replace(temp, out / "本机用量.md")
 
 
-def collect(root, out):
+def collect(root, out, state_dir=None):
     out.mkdir(parents=True, exist_ok=True)
     if not (root / "sessions").is_dir():
         raise RuntimeError("Codex sessions directory unavailable")
-    db = sqlite3.connect(out / "local-usage-state.sqlite", timeout=10)
+    state_dir = Path(state_dir or out)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(state_dir / "local-usage-state.sqlite", timeout=10)
     db.executescript("""
         CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, mtime INTEGER, size INTEGER, state TEXT);
         CREATE TABLE IF NOT EXISTS seen(key TEXT PRIMARY KEY);

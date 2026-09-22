@@ -1,5 +1,6 @@
 """Hourly local sampling: account metadata RPC only, never a model turn."""
 import argparse
+import sys
 import contextlib
 import importlib.util
 import io
@@ -12,14 +13,18 @@ import subprocess
 import threading
 from datetime import datetime, timezone, timedelta
 
-ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from settings import ROOT as PROJECT, DEFAULT_CONFIG, load, resolve, codex_root
+ROOT = PROJECT / 'data'
+LOGS = PROJECT / 'logs'
+CACHE = PROJECT / 'cache/monitor'
 HIDDEN = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 def now():
     return datetime.now(timezone.utc).isoformat()
 
 def append(name, value):
-    with (ROOT / name).open('a', encoding='utf-8') as f:
+    with ((LOGS if name in ('quota-errors.jsonl', 'local-monitor-history.jsonl') else ROOT) / name).open('a', encoding='utf-8') as f:
         f.write(json.dumps(value, ensure_ascii=False) + '\n')
 
 def quota(codex_root, executable=None):
@@ -107,12 +112,21 @@ def record(data):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--codex-root', type=Path, default=Path.home()/'.codex')
+    parser.add_argument('--codex-root', type=Path)
+    parser.add_argument('--config', type=Path, default=DEFAULT_CONFIG)
     parser.add_argument('--codex-exe')
     args = parser.parse_args()
+    global ROOT, LOGS, CACHE
+    config = load(args.config)
+    ROOT = resolve(config.get('data_dir', 'data'))
+    LOGS = resolve(config.get('logs_dir', 'logs'))
+    CACHE = resolve('cache/monitor')
+    for folder in (ROOT, LOGS, CACHE):
+        folder.mkdir(parents=True, exist_ok=True)
+    args.codex_root = args.codex_root or codex_root(config)
     # OS releases this lock even if the process crashes.
     import msvcrt
-    with (ROOT / 'local-monitor.lock').open('a+b') as lock:
+    with (CACHE / 'local-monitor.lock').open('a+b') as lock:
         lock.seek(0)
         try:
             msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
@@ -126,11 +140,11 @@ def main():
             summary['quota_error'] = type(exc).__name__ + ': ' + str(exc)[:500]
             append('quota-errors.jsonl', dict(captured_at_utc=now(), stage='local_quota', error=summary['quota_error']))
         try:
-            spec = importlib.util.spec_from_file_location('collector', ROOT/'collect-local-usage.py')
+            spec = importlib.util.spec_from_file_location('collector', PROJECT/'src/statistics/collect_local_usage.py')
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             with contextlib.redirect_stdout(io.StringIO()):
-                sample = module.collect(args.codex_root, ROOT)
+                sample = module.collect(args.codex_root, ROOT, CACHE)
             summary['new_tokens'] = sample['totals']['total_tokens']
             summary['local_warnings'] = sample['warnings']
             if sample['warnings']:
@@ -138,7 +152,7 @@ def main():
         except Exception as exc:
             summary.update(status='error', local_error=type(exc).__name__ + ': ' + str(exc)[:500])
         append('local-monitor-history.jsonl', summary)
-        (ROOT/'local-monitor-status.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
+        (LOGS/'local-monitor-status.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
         print(json.dumps(summary, ensure_ascii=False))
         return 0 if summary['status'] == 'ok' else 1
 

@@ -1,0 +1,13 @@
+{
+  "codex_root": "",
+  "quota_dir": "data",
+  "cache_dir": "cache/dashboard",
+  "port": 8766,
+  "refresh_seconds": 60,
+  "timezone": "+08:00",
+  "monitor_thread_id": "",
+  "data_dir": "data",
+  "logs_dir": "logs",
+  "export_dir": "exports",
+  "monitor_interval_minutes": 60
+}
