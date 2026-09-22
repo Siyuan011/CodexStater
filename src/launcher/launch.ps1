@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [ValidateSet('launch', 'stop', 'export', 'Install', 'Status', 'Pause', 'Resume', 'Remove')]
+    [ValidateSet('launch', 'stop', 'export', 'Install', 'Status', 'Pause', 'Resume', 'Remove', 'Run')]
     [string]$Action = 'launch',
     [string]$Config = '',
     [string]$CodexRoot = '',
@@ -160,11 +160,14 @@ try {
         exit 0
     }
     if (-not $configExists -and -not (Test-Path -LiteralPath $configPath -PathType Leaf)) { Save-LocalConfig }
-    if ($Action -eq 'Install') {
+    if ($Action -in @('Install','Run')) {
         $settings | Add-Member -NotePropertyName codex_root -NotePropertyValue $dataRoot -Force
         Save-LocalConfig
-        & (Join-Path $projectRoot 'src/monitor/manage.ps1') -Action $Action -PythonPath $pythonPath -ConfigPath $configPath
-        exit 0
+        $monitorAction = 'Install'
+        if ($Action -eq 'Run') { $monitorAction = 'Ensure' }
+        & (Join-Path $projectRoot 'src/monitor/manage.ps1') -Action $monitorAction -PythonPath $pythonPath -ConfigPath $configPath
+        if ($Action -eq 'Install') { exit 0 }
+        $Action = 'launch'
     }
     $appArguments = @((Join-Path $projectRoot 'src/dashboard/app.py'), $Action, '--config', $configPath, '--codex-root', $dataRoot)
     if ($Action -eq 'launch' -and $NoBrowser) { $appArguments += '--no-browser' }

@@ -2,15 +2,23 @@
 
 本机 Codex 用量面板及每小时后台采样。Python 3.9+，仅标准库，不发起模型对话。
 
-## 双击使用（Windows）
+## 一键运行
 
-- `打开用量面板.cmd`：自动寻找 Python 和 .codex，创建配置并打开面板。
-- `停止用量面板.cmd`：关闭面板服务。
-- `导出用量报告.cmd`：将可交互 HTML 保存到 exports 并打开。
-- `安装后台巡检.cmd`：安装当前用户的计划任务，默认每小时采样一次。
-- `查看巡检状态.cmd`：显示最近结果、下次时间和采样状态。
-- `暂停后台巡检.cmd` / `恢复后台巡检.cmd`：控制定时采样。
-- `卸载后台巡检.cmd`：移除计划任务，保留数据。
+Windows 双击根目录 `run.cmd`：自动安装或恢复每小时巡检，立即触发一次后台采样，然后打开用量面板。重复运行复用相同配置的计划任务，不重置其下次时间，也不重复启动面板。采样异步完成，页面随后显示新数据。若之前暂停了巡检，运行此入口会恢复巡检。
+
+Git Bash 执行 `bash run.sh`，行为相同。可用 `bash run.sh -Check -NonInteractive` 仅检查环境，用 `bash run.sh -NoBrowser -NonInteractive` 启动但不打开浏览器。
+
+根目录保留 `run.cmd` 和 `run.sh` 两种入口；分功能入口放在 `scripts_cmd/`、`scripts_bash/`，名称全部为英文。脚本从任意工作目录启动均可。
+
+## 分功能入口（Windows）
+
+- `scripts_cmd/open-dashboard.cmd`：自动寻找 Python 和 .codex，创建配置并打开面板。
+- `scripts_cmd/stop-dashboard.cmd`：关闭面板服务。
+- `scripts_cmd/export-report.cmd`：将可交互 HTML 保存到 exports 并打开。
+- `scripts_cmd/install-monitor.cmd`：安装当前用户的计划任务，默认每小时采样一次。
+- `scripts_cmd/monitor-status.cmd`：显示最近结果、下次时间和采样状态。
+- `scripts_cmd/pause-monitor.cmd` / `scripts_cmd/resume-monitor.cmd`：控制定时采样。
+- `scripts_cmd/uninstall-monitor.cmd`：移除计划任务，保留数据。
 
 首次可直接双击入口，无需输入命令。电脑需要已安装 Python 3.9+（可复用 Codex 的 Python）。正常后台采样没有窗口；入口出错会显示信息并停留。
 
@@ -21,6 +29,8 @@
 `config` 配置；`data` 历史记录及账号标注；`logs` 运行状态；`cache` 增量数据库；`exports` 导出报告；`docs` 使用说明；`tests` 测试。
 
 面板支持 24 小时、7 天、自定义日期，逐小时分对话明细，模型与推理强度筛选，以及账号时段标注。
+
+Bash 分功能脚本与 CMD 一一对应，例如 `bash scripts_bash/monitor-status.sh`。Bash 版本目前面向 **Windows Git Bash**，复用 Windows PowerShell 和计划任务；不支持 Linux/macOS 的后台调度。详见 [Bash 使用说明](docs/BASH.md)。
 
 详见 [使用说明](docs/使用说明.md) 和 [后台巡检说明](docs/本地后台巡检说明.md)。
 
