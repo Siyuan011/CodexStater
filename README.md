@@ -6,7 +6,7 @@
 
 Windows 双击根目录 `run.cmd`：自动安装或恢复每小时巡检，立即触发一次后台采样，然后打开用量面板。重复运行复用相同配置的计划任务，不重置其下次时间，也不重复启动面板。采样异步完成，页面随后显示新数据。若之前暂停了巡检，运行此入口会恢复巡检。
 
-Git Bash 执行 `bash run.sh`，行为相同。可用 `bash run.sh -Check -NonInteractive` 仅检查环境，用 `bash run.sh -NoBrowser -NonInteractive` 启动但不打开浏览器。
+Linux/macOS 执行 `bash run.sh`，自动安装用户级定时任务并打开面板。`bash run.sh --check` 只检查路径，`bash run.sh --no-browser` 不打开浏览器。Bash 不支持 Windows/Git Bash；Windows 继续使用 CMD。Linux 需要 systemd 用户服务，macOS 需要图形登录会话。
 
 根目录保留 `run.cmd` 和 `run.sh` 两种入口；分功能入口放在 `scripts_cmd/`、`scripts_bash/`，名称全部为英文。脚本从任意工作目录启动均可。
 
@@ -30,7 +30,7 @@ Git Bash 执行 `bash run.sh`，行为相同。可用 `bash run.sh -Check -NonIn
 
 面板支持 24 小时、7 天、自定义日期，逐小时分对话明细，模型与推理强度筛选，以及账号时段标注。
 
-Bash 分功能脚本与 CMD 一一对应，例如 `bash scripts_bash/monitor-status.sh`。Bash 版本目前面向 **Windows Git Bash**，复用 Windows PowerShell 和计划任务；不支持 Linux/macOS 的后台调度。详见 [Bash 使用说明](docs/BASH.md)。
+Bash 分功能脚本与 CMD 一一对应，例如 `bash scripts_bash/monitor-status.sh`。Linux 使用 systemd timer，macOS 使用 launchd LaunchAgent。**Linux/macOS 仅完成代码及静态检查，未进行实机运行或调度验证。** 详见 [Bash 使用说明](docs/BASH.md)。
 
 详见 [使用说明](docs/使用说明.md) 和 [后台巡检说明](docs/本地后台巡检说明.md)。
 

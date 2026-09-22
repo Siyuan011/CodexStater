@@ -9,5 +9,6 @@
   "data_dir": "data",
   "logs_dir": "logs",
   "export_dir": "exports",
-  "monitor_interval_minutes": 60
+  "monitor_interval_minutes": 60,
+  "codex_exe": ""
 }

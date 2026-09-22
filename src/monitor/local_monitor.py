@@ -28,8 +28,8 @@ def append(name, value):
         f.write(json.dumps(value, ensure_ascii=False) + '\n')
 
 def quota(codex_root, executable=None):
-    exe = executable or shutil.which('codex.exe')
-    if not exe:
+    exe = executable or shutil.which('codex.exe' if os.name == 'nt' else 'codex')
+    if not exe and os.name == 'nt':
         candidates = list((Path(os.environ['LOCALAPPDATA']) / 'OpenAI/Codex/bin').glob('*/codex.exe'))
         if candidates:
             exe = str(max(candidates, key=lambda p: p.stat().st_mtime))
@@ -124,12 +124,19 @@ def main():
     for folder in (ROOT, LOGS, CACHE):
         folder.mkdir(parents=True, exist_ok=True)
     args.codex_root = args.codex_root or codex_root(config)
+    args.codex_exe = args.codex_exe or config.get('codex_exe')
+    if args.codex_exe and ('/' in args.codex_exe or '\\' in args.codex_exe):
+        args.codex_exe = str(resolve(args.codex_exe))
     # OS releases this lock even if the process crashes.
-    import msvcrt
     with (CACHE / 'local-monitor.lock').open('a+b') as lock:
         lock.seek(0)
         try:
-            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             return 0
         summary = {'captured_at_utc': now(), 'status': 'ok', 'quota_windows': 0}
