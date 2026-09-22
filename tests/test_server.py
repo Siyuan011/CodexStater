@@ -96,6 +96,25 @@ class ServerTest(unittest.TestCase):
                     with self.assertRaises(urllib.error.HTTPError) as failure:
                         opener.open(urllib.request.Request(base+suffix,headers=headers))
                     self.assertIn(failure.exception.code,(403,404))
+                account_url=base+"/api/accounts"
+                with opener.open(account_url) as response:
+                    accounts=json.load(response)
+                self.assertEqual(accounts,dict(revision=0,marks=[]))
+                payload=json.dumps(dict(revision=0,marks=[dict(start=round((now-90)*1000),account="A")])).encode()
+                def account_request(body=payload, headers=None):
+                    return urllib.request.Request(account_url,data=body,method="POST",headers=headers or {"Content-Type":"application/json","X-Stater-Write":"1"})
+                with self.assertRaises(urllib.error.HTTPError) as forbidden:
+                    opener.open(account_request(headers={"Content-Type":"application/json"}))
+                self.assertEqual(forbidden.exception.code,403)
+                with opener.open(account_request()) as response:
+                    self.assertEqual(json.load(response)["revision"],1)
+                with self.assertRaises(urllib.error.HTTPError) as conflict:
+                    opener.open(account_request())
+                self.assertEqual(conflict.exception.code,409)
+                with opener.open(base+"/api/data") as response:
+                    attributed=json.load(response)
+                rows=[t for i in attributed["views"]["24"]["intervals"] for t in i["tasks"]]
+                self.assertEqual({t["account"]:t["total"] for t in rows},{"__unknown__":120,"A":360})
                 reused=subprocess.run([sys.executable,str(APP),"launch","--config",str(config),"--no-browser"],
                                       capture_output=True,text=True,encoding="utf-8",timeout=10)
                 self.assertEqual(reused.returncode,0,reused.stderr)

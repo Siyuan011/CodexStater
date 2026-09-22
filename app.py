@@ -18,7 +18,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from usage_store import UsageStore
+from usage_store import UsageStore, AccountConflict
 
 BASE = Path(__file__).resolve().parent
 APP_ID = "codex-local-stater-v1"
@@ -56,7 +56,7 @@ def load_config(path, args):
 def page(data=None):
     template = (BASE / "web/index.html").read_text(encoding="utf-8")
     css = (BASE / "web/dashboard.css").read_text(encoding="utf-8")
-    js = "\n".join((BASE / name).read_text(encoding="utf-8") for name in ("web/logic.js", "web/share-chart.js", "web/dashboard.js"))
+    js = "\n".join((BASE / name).read_text(encoding="utf-8") for name in ("web/logic.js", "web/share-chart.js", "web/accounts.js", "web/dashboard.js"))
     packed = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
     return template.replace("/*__STYLE__*/", css).replace("/*__SCRIPT__*/", js).replace("__BOOTSTRAP__", packed)
 
@@ -111,6 +111,8 @@ def serve(config):
                 return self.send(200, page(), "text/html; charset=utf-8")
             if parsed.path == "/health":
                 return self.data(200, dict(app=APP_ID, signature=config["signature"], pid=os.getpid()))
+            if parsed.path == "/api/accounts":
+                return self.data(200, store.accounts())
             if parsed.path == "/api/data":
                 try:
                     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
@@ -130,6 +132,20 @@ def serve(config):
             return self.data(404, {"error": "not found"})
 
         def do_POST(self):
+            if self.path == "/api/accounts":
+                if not self.allowed() or self.headers.get("X-Stater-Write") != "1" or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                    return self.data(403, {"error": "只允许面板保存账号时段"})
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= 262144:
+                        raise ValueError("账号时段数据大小无效")
+                    return self.data(200, store.save_accounts(json.loads(self.rfile.read(length))))
+                except AccountConflict as error:
+                    return self.data(409, {"error": str(error)})
+                except (ValueError, UnicodeError) as error:
+                    return self.data(400, {"error": str(error)})
+                except Exception:
+                    return self.data(500, {"error": "账号时段保存失败，请稍后重试"})
             if not self.allowed() or self.path != "/api/shutdown" or self.headers.get("X-Stater-Key") != shutdown_key:
                 return self.data(403, {"error": "forbidden"})
             self.data(200, {"status": "stopping"})

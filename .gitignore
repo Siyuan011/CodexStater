@@ -13,3 +13,5 @@ config.local.json
 *.log
 *.bundle
 config.backup-*.json
+
+account-data/

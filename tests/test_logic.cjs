@@ -117,3 +117,10 @@ assert(M.rangeError(customEnd-366*86400000-1,customEnd,customEnd));
 assert.equal(M.rangeError(customStart,customEnd+60000,customEnd),'');
 assert(M.rangeError(customStart,customEnd+60001,customEnd));
 console.log('Custom range timezone conversion, calendar validation, ordering and 366-day limit: OK');
+
+const accountRows=[{id:'same',model:'m',effort:'medium',account:'A',total:100},{id:'same',model:'m',effort:'medium',account:'B',total:200},{id:'old',model:'m',total:30}];
+assert.equal(M.sum(M.filter(accountRows,{account:'A'},'')).total,100);
+assert.equal(M.sum(M.filter(accountRows,{account:'B'},'')).total,200);
+assert.equal(M.sum(M.filter(accountRows,{account:'__unknown__'},'')).total,30);
+assert.equal(M.sum(M.filter(accountRows,{account:''},'')).total,330);
+console.log('Account filters preserve totals and treat older snapshots as unknown: OK');

@@ -2,7 +2,7 @@
 "use strict";
 const $=id=>document.getElementById(id), M=window.StaterMath, NS="http://www.w3.org/2000/svg";
 const initial=JSON.parse($("bootstrap").textContent);let D=initial,live=!initial,busy=false,timer=null,lastWidth=0,selectedHour=0,requestId=0,requestController=null,rangePending=false;
-const state={hours:24,model:"",effort:"",excludeMonitor:false,excludeInternal:false,task:null,customRange:null,...(initial?.ui||{})};
+const state={hours:24,account:"",model:"",effort:"",excludeMonitor:false,excludeInternal:false,task:null,customRange:null,...(initial?.ui||{})};
 let rankingExpanded=false;
 const hiddenQuota=new Set(),fmt=new Intl.NumberFormat("zh-CN");
 const n=x=>fmt.format(Math.round(x)),compact=x=>x>=1e8?(x/1e8).toFixed(2)+" 亿":x>=1e4?(x/1e4).toFixed(2)+" 万":n(x);
@@ -74,7 +74,7 @@ function drawQuota(){
  const v=view(),points=D.quota.filter(p=>p.t>=v.start&&(state.hours==="custom"?p.t<v.end:p.t<=v.end)),svg=$("quota-chart"),a=axes(svg,v.start,v.end,100,"剩余 (%)",215);
  const latest=points.at(-1),codex=latest?.windows.find(w=>w.key==="codex:primary");
  $("quota-status").textContent=latest?"最近账号采样 "+date(latest.t)+" · 距面板更新 "+Math.max(0,Math.round((D.generatedAt-latest.t)/60000))+" 分钟"+(codex?" · Codex 剩余 "+codex.remaining+"%":""):"暂无额度历史；可在配置中指定原巡检记录目录。";
- $("quota-note").textContent="每小时巡检更新账号额度；本机 Token 由面板单独刷新。";
+ $("quota-note").textContent="额度历史为独立采样，不随手工账号筛选；账号筛选仅作用于本机 Token 用量。";
  const series=[...new Map(points.flatMap(p=>p.windows.map(w=>[w.key,w.name]))).entries()].sort((a,b)=>a[0].localeCompare(b[0]));
  $("quota-legend").replaceChildren();
  series.forEach(([key,name],index)=>{
@@ -109,6 +109,9 @@ function renderComparison(items,tot,conversationCount){
 function render(){
  if(!D)return;
  const v=view(),available=v.intervals.flatMap(i=>i.tasks);
+ const accountLabels=[...new Set(["__unknown__",...(D.accounts?.marks||[]).map(m=>m.account),...available.map(t=>t.account||"__unknown__")])];
+ optionsFor("account",accountLabels,state.account,"全部账号",a=>a==="__unknown__"?"未知账号":a);
+ $("manage-accounts").disabled=false;
  optionsFor("model",[...new Set(available.map(t=>t.model))].sort(),state.model,"全部模型");
  const effortOrder=["none","minimal","low","medium","high","xhigh","max","ultra","unknown"];
  const efforts=[...new Set(M.filter(available,{...state,effort:""},D.monitorId).map(M.effort))].sort((a,b)=>(effortOrder.includes(a)?effortOrder.indexOf(a):effortOrder.length)-(effortOrder.includes(b)?effortOrder.indexOf(b):effortOrder.length)||a.localeCompare(b));
@@ -118,7 +121,7 @@ function render(){
  document.querySelectorAll("[data-hours]").forEach(b=>b.setAttribute("aria-pressed",String(Number(b.dataset.hours)===state.hours)));
  $("custom-range").disabled=false;$("custom-range").setAttribute("aria-pressed",String(state.hours==="custom"));
  const items=allTasks(),tot=M.sum(items),ranked=M.conversations(items);
- $("filter-empty").hidden=items.length>0;$("filter-empty").textContent="当前时间范围与筛选组合没有用量记录；已保留你的筛选，可更换时间范围、模型、推理强度或恢复全部。";
+ $("filter-empty").hidden=items.length>0;$("filter-empty").textContent="当前时间范围与筛选组合没有用量记录；已保留你的筛选，可更换时间范围、账号、模型、推理强度或恢复全部。";
  $("total").textContent=compact(tot.total);$("total-exact").textContent=n(tot.total)+" Token";
  $("cache").textContent=percent(tot.cached,tot.input);$("output").textContent=compact(tot.output);$("reasoning").textContent="其中推理 "+n(tot.reasoning);$("count").textContent=ranked.length;
  $("range-label").textContent=date(v.start)+" — "+date(v.end)+" · "+zone()+(state.hours==="custom"?" · 自定义范围（不含结束时间）":" · 首尾小时可能不完整");
@@ -160,7 +163,7 @@ function cancelLoad(){
 }
 function retainCustom(data){
  const saved=D?.views.custom;
- if(!data.views.custom&&saved){
+ if(!data.views.custom&&saved&&(data.accounts?.revision||0)===(D.accounts?.revision||0)){
   data.views.custom=saved;
   const points=new Map((D.quota||[]).filter(p=>p.t>=saved.start&&p.t<saved.end).map(p=>[p.t,p]));
   for(const point of data.quota)points.set(point.t,point);
@@ -182,7 +185,7 @@ async function load(force=false,requestedRange=activeRange(),applyRange=false){
   if(requestedRange&&(!data.views.custom||data.views.custom.start!==requestedRange.start||data.views.custom.end!==requestedRange.end))throw Error("返回的时间范围不一致，请重试。");
   D=retainCustom(data);
   if(applyRange){state.hours="custom";state.customRange={...requestedRange};rankingExpanded=false;rangeLoading(false);$("range-dialog").close();}
-  render();
+  render();return true;
  }catch(error){
   if(id!==requestId||error.name==="AbortError")return;
   const target=$(applyRange?"range-error":"error");target.hidden=false;
@@ -224,7 +227,8 @@ function exportHTML(){
  if(!D)return;
  const clone=document.documentElement.cloneNode(true);
  clone.querySelector("#bootstrap").textContent=JSON.stringify({...D,ui:state}).replace(/</g,"\\u003c");
- clone.querySelector("#tooltip").hidden=true;clone.querySelector("#hour-dialog").removeAttribute("open");clone.querySelector("#range-dialog").removeAttribute("open");
+ clone.querySelector("#tooltip").hidden=true;clone.querySelector("#hour-dialog").removeAttribute("open");clone.querySelector("#range-dialog").removeAttribute("open");clone.querySelector("#accounts-dialog").removeAttribute("open");
+ for(const id of ["accounts-list","accounts-names","accounts-error","accounts-status"])clone.querySelector("#"+id).replaceChildren();
  const content="<!doctype html>\n"+clone.outerHTML,blob=new Blob([content],{type:"text/html;charset=utf-8"}),url=URL.createObjectURL(blob),a=document.createElement("a");
  a.href=url;a.download="codex-"+(state.hours==="custom"?"custom-"+M.localDateTime(view().start,D.timezoneOffset).replace(/[:T]/g,"-")+"_"+M.localDateTime(view().end,D.timezoneOffset).replace(/[:T]/g,"-"):state.hours===168?"7days":"24hours")+"-"+new Date(D.generatedAt).toISOString().slice(0,10)+".html";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
@@ -234,11 +238,12 @@ document.querySelectorAll("[data-hours]").forEach(b=>b.onclick=()=>selectPreset(
 $("custom-range").onclick=openRange;$("range-form").onsubmit=applyRange;$("range-cancel").onclick=closeRange;
 $("range-dialog").oncancel=event=>{event.preventDefault();closeRange();};
 for(const id of ["range-start","range-end"])$(id).oninput=()=>{if(!rangePending){$("range-error").hidden=true;$("range-error").textContent="";}};
+$("account").onchange=()=>{state.account=$("account").value;updateFilters();};
 $("model").onchange=()=>{state.model=$("model").value;updateFilters();};
 $("effort").onchange=()=>{state.effort=$("effort").value;updateFilters();};
 $("exclude-monitor").onchange=()=>{state.excludeMonitor=$("exclude-monitor").checked;updateFilters();};
 $("exclude-internal").onchange=()=>{state.excludeInternal=$("exclude-internal").checked;updateFilters();};
-$("reset").onclick=()=>{Object.assign(state,{model:"",effort:"",excludeMonitor:false,excludeInternal:false,task:null});selectPreset(24);};
+$("reset").onclick=()=>{Object.assign(state,{account:"",model:"",effort:"",excludeMonitor:false,excludeInternal:false,task:null});selectPreset(24);};
 $("clear-task").onclick=()=>{state.task=null;updateFilters();};
 $("hour-open").onclick=()=>{if(D)openHour(Number($("hour-picker").value));};
 $("close-dialog").onclick=()=>$("hour-dialog").close();
@@ -246,5 +251,10 @@ $("refresh").onclick=()=>load(true);$("export").onclick=exportHTML;
 window.addEventListener("scroll",hideTip,{passive:true});
 document.addEventListener("visibilitychange",()=>{if(live&&!document.hidden)load();});
 new ResizeObserver(entries=>{const width=entries[0].contentRect.width;if(width!==lastWidth){lastWidth=width;if(D){drawUsage();drawQuota();}}}).observe($("stater"));
+window.StaterAccounts({getData:()=>D,live,onSaved:async()=>{
+ cancelLoad();rankingExpanded=false;
+ const saved=D.views.custom;
+ return await load(true,saved?{start:saved.start,end:saved.end}:null);
+}});
 if(D)render();else load(true);
 })();

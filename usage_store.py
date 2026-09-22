@@ -74,6 +74,10 @@ def reasoning_effort(payload):
     return value.strip().lower() or "unknown"
 
 
+class AccountConflict(ValueError):
+    pass
+
+
 class UsageStore:
     def __init__(self, config):
         self.config = config
@@ -105,6 +109,15 @@ class UsageStore:
                 self.db.execute("ALTER TABLE events ADD COLUMN effort TEXT NOT NULL DEFAULT 'unknown'")
             self.db.execute("INSERT OR REPLACE INTO meta VALUES('schema_version',?)", (str(SCHEMA_VERSION),))
         self.history_enabled = bool(self.db.execute("SELECT 1 FROM meta WHERE key='history_enabled'").fetchone())
+        # User annotations are durable data, separate from the disposable log cache.
+        account_dir = cache.parent / "account-data"
+        account_dir.mkdir(parents=True, exist_ok=True)
+        self.db.execute("ATTACH DATABASE ? AS attribution", (str(account_dir / ("accounts-" + identity + ".sqlite")),))
+        self.db.executescript("""
+          CREATE TABLE IF NOT EXISTS attribution.marks(start INTEGER PRIMARY KEY, account TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS attribution.settings(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+          INSERT OR IGNORE INTO attribution.settings VALUES('revision',0);
+        """)
         self.last_scan = 0
         self.last_result = {}
         self.initialized = bool(self.db.execute("SELECT 1 FROM meta WHERE key='initialized'").fetchone())
@@ -232,6 +245,46 @@ class UsageStore:
                                     warnings=sorted(set(warnings))[:20])
             return self.last_result
 
+    def accounts(self):
+        with self.lock:
+            return dict(revision=self.db.execute("SELECT value FROM attribution.settings WHERE key='revision'").fetchone()[0],
+                        marks=[dict(start=row[0], account=row[1]) for row in
+                               self.db.execute("SELECT start,account FROM attribution.marks ORDER BY start")])
+
+    def save_accounts(self, data, now=None):
+        now = time.time() if now is None else now
+        if not isinstance(data, dict) or type(data.get("revision")) is not int:
+            raise ValueError("账号时段版本无效，请重新打开管理窗口")
+        rows = data.get("marks")
+        if not isinstance(rows, list) or len(rows) > 2000:
+            raise ValueError("账号切换记录最多 2000 条")
+        validated, seen = [], set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("账号切换记录格式无效")
+            start, account = row.get("start"), row.get("account")
+            if type(start) not in (int, float) or not math.isfinite(start) or start != int(start) or not 0 <= start <= (now + 60) * 1000:
+                raise ValueError("请选择有效的开始时间，且不能晚于当前时间")
+            if not isinstance(account, str) or not account.strip() or len(account.strip()) > 80:
+                raise ValueError("账号名称须为 1–80 个字符")
+            account = account.strip()
+            if account == "未知账号" or any(ord(char) < 32 for char in account):
+                raise ValueError("请选择有效的账号名称；未知账号请使用专门选项")
+            if start in seen:
+                raise ValueError("同一个时间只能标记一个账号，请先修改原记录")
+            seen.add(start)
+            validated.append((int(start), account))
+        with self.lock, self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            revision = self.db.execute("SELECT value FROM attribution.settings WHERE key='revision'").fetchone()[0]
+            if data["revision"] != revision:
+                raise AccountConflict("账号时段已被另一页面修改，请关闭后重新打开，再进行修改")
+            self.db.execute("DELETE FROM attribution.marks")
+            self.db.executemany("INSERT INTO attribution.marks VALUES(?,?)", sorted(validated))
+            self.db.execute("UPDATE attribution.settings SET value=value+1 WHERE key='revision'")
+            result = self.accounts()
+        return result
+
     def task_names(self, ids):
         names = {ident: "会话 · " + ident[:8] for ident in ids}
         internal = set()
@@ -305,20 +358,22 @@ class UsageStore:
         shift = self.config["timezone_offset"] * 60
         query = """
           WITH selected AS (
-            SELECT *, (ts+?)/3600.0 AS local_hour
+            SELECT *, (ts+?)/3600.0 AS local_hour,
+                   COALESCE((SELECT account FROM attribution.marks WHERE start<=events.ts*1000
+                             ORDER BY start DESC LIMIT 1), '__unknown__') AS account
             FROM events WHERE ts>=? AND ts{end_operator}?
           )
           SELECT (CAST(local_hour AS INTEGER) - (local_hour < CAST(local_hour AS INTEGER)))*3600-?
                  AS bucket,thread,model,effort,project,
-                 SUM(input),SUM(cached),SUM(output),SUM(reasoning),SUM(total)
-          FROM selected GROUP BY bucket,thread,model,effort,project
+                 SUM(input),SUM(cached),SUM(output),SUM(reasoning),SUM(total),account
+          FROM selected GROUP BY bucket,thread,model,effort,project,account
           ORDER BY bucket,thread,model,effort
         """
         buckets = {}
         for row in self.db.execute(query.format(end_operator=end_operator), (shift, start, now, shift)):
             task = dict(id=row[1], title=names.get(row[1], "会话 · " + row[1][:8]), model=row[2],
                         effort=row[3], project=row[4], internal=row[1] in internal or row[2] == "codex-auto-review",
-                        **dict(zip(FIELDS, row[5:])))
+                        account=row[10], **dict(zip(FIELDS, row[5:10])))
             buckets.setdefault(row[0], []).append(task)
         earliest, latest = self.db.execute("SELECT MIN(ts),MAX(ts) FROM events WHERE ts>=? AND ts" + end_operator + "?", (start, now)).fetchone()
         result = []
@@ -358,4 +413,4 @@ class UsageStore:
             return dict(version=1, generatedAt=now * 1000, machine=platform.node(),
                         timezone=self.config["timezone"], timezoneOffset=self.config["timezone_offset"],
                         refreshSeconds=self.config["refresh_seconds"], monitorId=self.config.get("monitor_thread_id", ""),
-                        views=views, quota=quota, scan=scan, warnings=scan["warnings"] + warnings)
+                        views=views, quota=quota, accounts=self.accounts(), scan=scan, warnings=scan["warnings"] + warnings)

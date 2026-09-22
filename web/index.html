@@ -8,12 +8,15 @@
 <div id="error" role="alert" hidden></div>
 <div class="toolbar">
 <div class="range-group" aria-label="时间范围"><button data-hours="24" aria-pressed="true">过去 24 小时</button><button data-hours="168" aria-pressed="false">过去 7 天</button><button id="custom-range" aria-pressed="false" aria-haspopup="dialog" aria-controls="range-dialog" disabled>自定义时间范围</button></div>
+<label>账号 <select id="account"><option value="">全部账号</option></select></label>
+<button id="manage-accounts" type="button" disabled>账号使用时段</button>
 <label>模型 <select id="model"><option value="">全部模型</option></select></label>
 <label>推理强度 <select id="effort"><option value="">全部强度</option></select></label>
 <label><input type="checkbox" id="exclude-monitor">排除本统计任务</label>
 <label><input type="checkbox" id="exclude-internal">排除内部审批</label>
 <button id="reset" class="subtle">恢复全部</button>
 </div>
+<p id="account-note" class="small muted">账号归属按手工标记的使用时段划分；未标记的记录归为未知账号。</p>
 <div class="selection" id="selection" hidden><span id="selected-task"></span><button id="clear-task" class="subtle">取消对话筛选</button></div>
 <p id="filter-empty" class="small muted" role="status" hidden></p>
 <div class="stats" aria-live="polite">
@@ -55,7 +58,7 @@
 <li>每小时明细按对话合并，保留模型与推理强度的对应关系；用量筛选同时作用于总览、分组比较、用量图表、明细和排行。</li>
 <li>推理强度按日志记录统计，中途换档按各次用量归属；缺失强度显示“未记录”。Ultra 与 Max 分开统计，用量不能证明质量或速度差异。</li>
 <li>账号额度来自原巡检保存的记录，更新频率仍为每小时；额度窗口变化处断开曲线。面板不调用账号接口、模型或 API。</li>
-<li>日志无可靠的逐事件账号与进程归属；内部审批用量单列但不视为官方账单。报告机器名是采集电脑，不证明导入日志的实际来源。</li>
+<li>账号归属来自手工标记的使用时段，未覆盖的记录归为未知账号，并非自动识别的登录账号；日志无可靠的进程归属；内部审批用量单列但不视为官方账单。报告机器名是采集电脑，不证明导入日志的实际来源。</li>
 <li>后台服务只监听 127.0.0.1。页面打开期间定时更新，隐藏时暂停轮询；再次打开或切回页面会刷新。导出的 HTML 是离线快照。</li></ul>
 </details>
 <footer class="small muted" id="footer"></footer>
@@ -70,5 +73,18 @@
 <p id="range-error" class="small" role="alert" hidden></p><p id="range-progress" class="small" role="status" hidden>正在查询历史用量，首次读取可能需要稍等…</p>
 <div class="range-dialog-actions"><button id="range-cancel" type="button">取消</button><button id="range-apply" type="submit" class="primary">应用范围</button></div>
 </form></dialog>
+<dialog id="accounts-dialog" aria-labelledby="accounts-title">
+<div class="panel-head"><div><h2 id="accounts-title">账号使用时段</h2><p id="accounts-hint" class="small muted"></p></div><button id="accounts-close" type="button">关闭</button></div>
+<p class="small muted">每条标记从指定时间起生效，直到下一条标记。首次标记之前归为未知账号；同名账号合并统计。这里只记录自定义名称，不读取登录凭证。</p>
+<form id="accounts-form" novalidate>
+<div class="range-fields"><label>账号名称<input id="accounts-name" maxlength="80" list="accounts-names" placeholder="例如：个人账号、工作账号" autocomplete="off"></label><datalist id="accounts-names"></datalist>
+<label>开始时间<input id="accounts-start" type="datetime-local" step="60" required></label></div>
+<label class="small"><input id="accounts-unknown" type="checkbox">从此时起归为未知账号</label>
+<div class="actions"><button id="accounts-now" type="button">填入当前时间</button><button id="accounts-add" type="submit">添加到列表</button></div>
+</form>
+<div id="accounts-list" class="account-periods"></div>
+<p id="accounts-error" class="small" role="alert" hidden></p><p id="accounts-status" class="small muted" role="status"></p>
+<div class="range-dialog-actions"><button id="accounts-cancel" type="button">取消</button><button id="accounts-save" type="button" class="primary">保存并更新统计</button></div>
+</dialog>
 <script id="bootstrap" type="application/json">__BOOTSTRAP__</script><script>/*__SCRIPT__*/</script>
 </body></html>
